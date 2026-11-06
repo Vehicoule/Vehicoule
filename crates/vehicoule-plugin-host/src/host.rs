@@ -159,14 +159,6 @@ pub struct PluginHost {
     config: HostConfig,
 }
 
-impl std::fmt::Debug for PluginHost {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PluginHost")
-            .field("config", &self.config)
-            .finish_non_exhaustive()
-    }
-}
-
 impl PluginHost {
     /// A host enforcing `config`.
     ///
