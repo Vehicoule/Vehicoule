@@ -36,7 +36,8 @@ Proposed default, to be confirmed by the user (section 10):
 
 ## 3. Plugin lifecycle
 
-1. **Install.** The host receives the plugin's bytes, already verified by the feed layer. It compiles them, checks
+1. **Install.** The host receives the plugin's bytes, already verified by the feed layer. Bytes over the size ceiling
+   (section 6) are rejected before any parsing or compilation. Otherwise it compiles them, checks
    that every import is one of the contract's (section 5), calls `describe` with a sandbox where every HTTP request is
    refused, and validates the manifest (section 4). Any failure rejects the plugin with a typed reason; nothing is
    kept.
@@ -46,7 +47,10 @@ Proposed default, to be confirmed by the user (section 10):
    dropped when the call returns. Nothing survives from one call to the next, so a plugin cannot keep user state and a
    failed call cannot corrupt the next one.
 4. **Compiled code** is compiled from the bytes at install and at each launch. Keeping it across launches waits for a
-   measurement and a new ADR (ADR 0007).
+   measurement and a new ADR (ADR 0007). Compilation runs on a host thread, never on the core's or the UI's, and the
+   app does not wait for it to start; a call to a plugin that is still compiling waits for it, under the call's wall
+   time budget. Fuel and store limits do not apply to the compiler, so the size ceiling is what bounds its work; the
+   compile time and memory of every plugin are recorded, and the ceiling is set from them (section 9).
 
 ## 4. Manifest
 
@@ -70,7 +74,10 @@ Returned by `describe`, validated at install:
   or credential is kept between requests by the host on the plugin's behalf. A refused request returns an error to
   the plugin and is counted in the call's report; it never reaches the network.
 - **Streams.** A resolved stream URL must also be `https` on a declared host, since the platform player will fetch
-  it; otherwise the result is rejected as invalid.
+  it; otherwise the result is rejected as invalid. The player edge receives the plugin's declared hosts with the
+  stream and checks every redirect hop against them: a hop to an undeclared host, or off `https`, fails the load, which
+  the core handles as any failed load. This check is the player edge's (each platform player), specified here because
+  the sandbox depends on it; its tests come with each player.
 - **Log.** Messages are bounded in size and count per call, tagged with the plugin id, and never shown to the user as
   app text.
 
@@ -85,6 +92,7 @@ set from measurements, section 9):
 - **Memory**: a ceiling on linear memory and on instances.
 - **HTTP**: a maximum number of requests per call, a maximum response body size, and a deadline per request.
 - **Output**: a maximum size of the returned value (strings, lists).
+- **Plugin size**: a maximum size of the plugin's bytes, checked before compilation (section 3).
 
 Exceeding any budget ends the call with the matching failure. None of them is retried by the host.
 
@@ -272,6 +280,8 @@ Must never happen:
 5. The host retries a failed call, or calls a second plugin, by itself.
 6. A stream URL on an undeclared host is returned to the caller.
 7. A redirect is followed to an undeclared host.
+8. A plugin over the size ceiling reaches the compiler.
+9. A platform player follows a stream's redirect to an undeclared host (tested with each player edge).
 
 Property tests (`proptest`) on the host-pattern matcher and the manifest validation. Mutation testing as everywhere.
 
