@@ -1,0 +1,5 @@
+[toolchain]
+# Pinned: a newer toolchain is a pull request of its own, with CI green.
+channel = "1.99.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

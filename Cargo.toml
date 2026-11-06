@@ -1,0 +1,54 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.99.1"
+repository = "https://github.com/Vehicoule/Vehicoule"
+license = "GPL-3.0-only"
+publish = false
+
+# Every dependency is declared here once; crates write `.workspace = true`.
+# Adding one needs a one-line justification in the pull request (AGENTS.md rule 11).
+[workspace.dependencies]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "deny"
+unreachable_pub = "deny"
+private_interfaces = "deny"
+private_bounds = "deny"
+unused_must_use = "deny"
+unused_qualifications = "deny"
+rust_2018_idioms = { level = "deny", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+# No panics in library code (AGENTS.md rule 9).
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+indexing_slicing = "deny"
+# The core never does arithmetic that can wrap silently: positions, indices and durations use checked or saturating
+# operations, and say which.
+arithmetic_side_effects = "deny"
+# No debugging leftovers.
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+# Lints must be silenced with a reason that the compiler checks.
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+# Floats are compared with a tolerance, never with ==.
+float_cmp = "deny"
+float_cmp_const = "deny"
+lossy_float_literal = "deny"
+# Clarity.
+missing_docs_in_private_items = "allow"
+module_name_repetitions = "allow"
