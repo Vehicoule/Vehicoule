@@ -284,10 +284,11 @@ measured case with a margin the user chooses, in an ADR, the same method as the 
 1. **Where things live**: the default in section 2 (contract and host in `Vehicoule`, plugins in
    `vehicoule-plugins` and `vehicoule-plugins-extra`)?
 2. **Wasmtime**: agreement to add it (ADR 0007), pinned to the LTS 48.x.
-3. **No WASI**: plugins get only the contract's `http` and `log` (ADR 0007, option 1)?
+3. **No WASI**: left to Claude by the user on 2026-11-06; taken: plugins get only the contract's `http` and `log`.
 4. **First music plugin**: the published plugins are `deezer`, `itunes`, `lrclib` and `ytmusic`. Only `ytmusic`
    resolves a full track to a stream, so it is the only one that tests the whole chain (search, resolve, play,
    radio); the three others give metadata, artwork and lyrics.
+   Accepted by the user on 2026-11-06: `ytmusic` first, in `vehicoule-plugins-extra`.
 
 ## 11. Order of the work
 

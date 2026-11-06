@@ -23,6 +23,8 @@ Facts, read on 2026-11-06:
   component model. Wasmtime implements the component model at tier 1 (`docs/stability-tiers.md` of
   `bytecodealliance/wasmtime`, tag `v50.0.1`). `wasmi` 2.0.0, the main pure-Rust interpreter, lists no component model
   support in its README; its only embedding interface is WASI preview 1.
+- `wasmer` 7.5.0, the latest stable on crates.io (MIT), has no component model: the word "component" appears nowhere
+  in its source. Its README calls its interpreter experimental; its `v8` backend vendors V8's C++ (`third-party/wee8`).
 - Wasmtime is Rust, licensed `Apache-2.0 WITH LLVM-exception` (allowed by `deny.toml`). On Unix with Cranelift, its
   build script compiles one 67-line C file, `src/runtime/vm/helpers.c` (weak libunwind symbols), with `cc`
   (`build.rs` of `wasmtime` 50.0.1).
@@ -49,7 +51,10 @@ Facts, read on 2026-11-06:
    tier 3 support on Android and iOS.
 2. **A core-module interpreter (`wasmi`) with a hand-written ABI.** Pure Rust, smaller, deterministic fuel. No
    component model: the contract becomes pointers and lengths we encode ourselves, on both sides, for every type.
-3. **No Wasm: plugins as native libraries or scripts.** Rejected by the sandbox requirement and by ADR 0001 (no
+3. **Wasmer with a hand-written ABI.** Same cost as option 2 for the contract (no component model), with Cranelift
+   or LLVM as compilers; its interpreter is experimental, which leaves iOS without a supported path. Its binary size
+   is not measured.
+4. **No Wasm: plugins as native libraries or scripts.** Rejected by the sandbox requirement and by ADR 0001 (no
    JavaScript engine).
 
 ### What a plugin may import
