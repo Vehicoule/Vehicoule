@@ -1,6 +1,6 @@
 # Core spec: playback sessions, queue and player model
 
-- Status: Proposed, waiting for the user
+- Status: Accepted (the user, 2026-11-06)
 - Scope: the first increment of `vehicoule-core`. Library, plugins, sync and UI come in their own specs.
 - Rules: [ADR 0003](adr/0003-core-architecture.md) (state machines, no I/O), [ADR 0004](adr/0004-verification.md)
   (Kani, proptest, mutants).
@@ -55,7 +55,21 @@ snapshots, on every platform. That is what makes the black box replay and the Ka
 ### Operations
 
 `Replace { entries, start }`, `PlayNext { entries }`, `Append { entries }`, `Remove { entry }`, `Move { entry, to }`,
-`Clear`, `SetRepeat`, `SetShuffle { seed }`, `Next`, `Previous`, `JumpTo { entry }`.
+`Clear`, `SetRepeat`, `SetShuffle { seed }`, `SetRadio`, `Next`, `Previous`, `JumpTo { entry }`.
+
+- `Previous`: when the position is at most 3 s, go to the previous entry (restart the current one if it is the first);
+  beyond 3 s, restart the current entry. The 3 s is Media3's `C.DEFAULT_MAX_SEEK_TO_PREVIOUS_POSITION_MS = 3_000`
+  (`libraries/common/src/main/java/androidx/media3/common/C.java`, branch `release` of `androidx/media`, read on
+  2026-11-06), with the same comparison: at most the threshold goes back.
+
+### Radio
+
+- `radio` is on or off, per session, on by default for music.
+- When radio is on and the last entry of the queue becomes current, the core sends one `RequestContinuation` seeded
+  with that entry's media. The answer appends its entries at the end, marked as radio; a failed or empty answer is
+  reported and the queue ends normally.
+- **[Kani]** A session never has more than one continuation request outstanding, and never sends one with radio off.
+- Which media follow is the plugins' job; the core only decides when to ask and where the answer goes.
 
 ### Invariants
 
@@ -70,6 +84,20 @@ snapshots, on every platform. That is what makes the black box replay and the Ka
    version filled it with covers).
 8. `Next` with `repeat = One` goes to the next entry; `repeat = One` only replays when a track ends by itself.
 
+### Preloading
+
+- When an entry starts playing, the core resolves the entry that would play next. When the next entry changes (an
+  edit, shuffle, repeat), it resolves the new one. No time before the end is involved.
+- A preloaded source that has expired when it is used follows the expiry rule of section 5.
+
+### Offline
+
+- Each entry knows whether its media is downloaded. Connectivity comes in as an event.
+- Offline, entries that are not downloaded are skipped without being marked failed, with a notice in the snapshot.
+  They are played normally again once the network is back.
+- Offline with no downloaded entry left ahead, the session waits in `WaitingForNetwork` on the next entry and starts
+  it when the network comes back. It never stops only because the next entry is not downloaded.
+
 ## 4. Player model
 
 ### States
@@ -82,6 +110,7 @@ Playing   { entry, anchor }
 Paused    { entry, position }
 Buffering { entry, position }
 Stopped   { entry, position }        after an explicit stop; resumable
+WaitingForNetwork { entry }          offline, nothing downloaded ahead (section 3, Offline)
 ```
 
 Errors are not a resting state: a failure moves the session on (section 5) and is reported in the snapshot.
@@ -111,7 +140,8 @@ Errors are not a resting state: a failure moves the session on (section 5) and i
 - A source that expires while playing (the platform reports an expired or forbidden source) gets **one** new
   resolution, then playback resumes at the same position. A second expiry of the same entry in a row is a failure.
 - Every wait has a deadline: `Resolving`, `Loading` and `Buffering` arm a timer when entered. When it fires before the
-  awaited report, the entry fails as above. The deadline values are not set here (section 7).
+  awaited report, the entry fails as above. The three deadlines are given to the core in its configuration, never
+  written in it; tests use arbitrary values. Their real values are set from measurements (section 7).
 - **[Kani]** A timer that fires after the state it guarded has been left does nothing.
 - Retries, timeouts and fallbacks are never stacked: there is exactly one rule per failure, above.
 
@@ -122,17 +152,17 @@ Errors are not a resting state: a failure moves the session on (section 5) and i
 - Every event and command goes into a bounded ring log owned by the runner. A test can load a log and replay it to
   get the exact same snapshots.
 
-## 7. Open questions for the user
+## 7. Decisions on the open questions
 
-1. **Previous**: restart the track when it has played more than a threshold, else go to the previous entry? Media3's
-   default threshold is to be checked in its source before it is proposed as the value.
-2. **Preloading**: when to resolve the next entry ahead of the end (the first version used about 20 s, without a
-   measurement). It drives the < 250 ms click-to-sound target for a preloaded track.
-3. **Deadlines** for resolving, loading and buffering: to be set from a measurement on the real resolver and players,
-   not guessed.
-4. **Radio at the end of the queue** (on by default in the first version's notes): in this increment, or with the
-   plugins?
-5. **Offline**: skip entries that are not downloaded and say so, as the first version's notes say?
+Answered by the user on 2026-11-06:
+
+1. **Previous**: Media3's threshold and comparison, 3 s (section 3).
+2. **Preloading**: resolve the next entry as soon as the current one starts playing (section 3).
+3. **Deadlines**: configuration of the core. Once the real resolver and players exist, the black box records every
+   resolution, load and buffering duration, in release builds on the Xiaomi 14 and the Mac; each deadline is then set
+   above the worst measured case, with a margin the user chooses, in an ADR.
+4. **Radio**: in the core now, the candidates from plugins later (section 3).
+5. **Offline**: skip entries that are not downloaded, never stop for it (section 3).
 
 ## 8. Not in this increment
 

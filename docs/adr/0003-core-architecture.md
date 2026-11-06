@@ -1,6 +1,6 @@
 # 0003. Build the core as synchronous state machines, in one process, with I/O at the edges
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-06
 - Deciders: the user
 
@@ -33,12 +33,26 @@ Wasm modules copy data on every call and run interpreted on iOS. Wasm stays for 
 
 ## Decision
 
-Recommended: option 1. Also recommended with it:
+Option 1, chosen by the user on 2026-11-06, with:
 
 - The playback position is computed from `(instant, position, rate)` reported by the player, never polled.
 - Every event and command passes through a bounded ring log (the "black box"), which a test can replay to reproduce a
   bug exactly.
 - Core types are generic over the content domain; music is the first domain, video and books add to it.
+
+### What goes where
+
+Accepted by the user on 2026-11-06:
+
+- **Core** (pure, no I/O, knows no provider): sessions, queue, player model, radio rules; the library as data (tracks,
+  albums, artists, likes, playlists, history, progress, profiles) with ids of our own that survive a source's
+  disappearance; capability routing (a priority list of plugins per capability, the next candidate on failure); the
+  user's corrections ("not the right track"), kept and passed back to plugins.
+- **Edges** (app code outside the core): the plugin host (Wasmtime, sandbox, budgets, declared HTTP hosts), the network
+  stack and cache, SQLite, downloads, the native players (Media3, AVFoundation), signed feed verification, later sync.
+- **Plugins** (WIT capabilities, only what depends on a service): search and suggestions, metadata (album, artist,
+  playlist pages), resolving a track to a playable stream with the provider's own matching, radio candidates, artwork,
+  lyrics, importing a pasted link. No file access, no direct network (only the hosts they declare), no user state.
 
 ## Consequences
 
