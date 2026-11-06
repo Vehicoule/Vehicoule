@@ -72,7 +72,7 @@ pub struct HostConfig {
     pub max_plugin_size: ByteSize,
     /// The fuel given to each call into a plugin, `describe` included.
     pub fuel_per_call: Fuel,
-    /// The ceiling on a plugin's linear memory; tables are bounded by the same number of bytes.
+    /// The ceiling on the bytes a call holds in all of its linear memories and tables together.
     pub max_memory: ByteSize,
 }
 

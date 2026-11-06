@@ -182,3 +182,14 @@ fn installs_are_independent() {
     assert!(host.install(&fixture("memory-bomb").unwrap()).is_err());
     assert!(host.install(&fixture("good").unwrap()).is_ok());
 }
+
+#[test]
+fn memories_that_each_fit_but_together_exceed_the_ceiling_are_stopped() {
+    // Two memories of 300 pages (18.75 MiB) each: either fits under the 32 MiB ceiling, both do not. The plugin's
+    // `describe` traps, so a host that bounded each memory alone would report `Trap` instead.
+    let error = host()
+        .unwrap()
+        .install(&fixture("multi-memory").unwrap())
+        .unwrap_err();
+    assert!(matches!(error, InstallError::MemoryLimit), "{error:?}");
+}

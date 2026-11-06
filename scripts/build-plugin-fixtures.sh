@@ -29,3 +29,11 @@ for feature in "${features[@]}"; do
   wasm-tools component new "$crate/target/wasm32-unknown-unknown/release/vehicoule_plugin_fixtures.wasm" \
     -o "$out/$feature.wasm"
 done
+
+# Plugins the Rust toolchain cannot produce, written as core modules in WAT.
+for wat in "$crate"/wat/*.wat; do
+  name="$(basename "$wat" .wat)"
+  wasm-tools component embed "$root/wit" --world vehicoule:plugin/base@0.1.0 "$wat" -o "$out/$name.core.wasm"
+  wasm-tools component new "$out/$name.core.wasm" -o "$out/$name.wasm"
+  rm "$out/$name.core.wasm"
+done

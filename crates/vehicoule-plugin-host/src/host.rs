@@ -106,11 +106,18 @@ impl log::Host for CallState {
     fn log(&mut self, _level: log::Level, _message: String) {}
 }
 
-/// Bounds linear memory and tables, and remembers that a growth was denied so the failure is reported as a memory
-/// limit rather than as the trap the plugin raises when its allocator fails.
+/// Bounds the bytes held by all of a call's linear memories and tables together, and remembers that a growth was
+/// denied so the failure is reported as a memory limit rather than as the trap the plugin raises when its allocator
+/// fails.
+///
+/// The ceiling is on the sum: a component can hold several memories (several core instances, or multi-memory), and a
+/// per-memory check would let each reach the ceiling. Wasmtime reports every creation (from zero) and every growth.
+/// A growth it allowed and then failed stays counted: `memory_grow_failed` is also called for growths never offered
+/// here, so refunding on it could shrink the count below what the plugin holds.
 #[derive(Debug)]
 pub(crate) struct MemoryLimiter {
     max_bytes: usize,
+    used_bytes: usize,
     denied: bool,
 }
 
@@ -118,13 +125,19 @@ impl MemoryLimiter {
     pub(crate) fn new(max: ByteSize) -> Self {
         Self {
             max_bytes: max.saturating_usize(),
+            used_bytes: 0,
             denied: false,
         }
     }
 
-    fn allow(&mut self, desired_bytes: usize) -> bool {
-        let allowed = desired_bytes <= self.max_bytes;
-        if !allowed {
+    fn allow(&mut self, current_bytes: usize, desired_bytes: usize) -> bool {
+        let total = self
+            .used_bytes
+            .saturating_add(desired_bytes.saturating_sub(current_bytes));
+        let allowed = total <= self.max_bytes;
+        if allowed {
+            self.used_bytes = total;
+        } else {
             self.denied = true;
         }
         allowed
@@ -134,21 +147,25 @@ impl MemoryLimiter {
 impl ResourceLimiter for MemoryLimiter {
     fn memory_growing(
         &mut self,
-        _current: usize,
+        current: usize,
         desired: usize,
         _maximum: Option<usize>,
     ) -> wasmtime::Result<bool> {
-        Ok(self.allow(desired))
+        Ok(self.allow(current, desired))
     }
 
     fn table_growing(
         &mut self,
-        _current: usize,
+        current: usize,
         desired: usize,
         _maximum: Option<usize>,
     ) -> wasmtime::Result<bool> {
         // Wasmtime stores one pointer per table element (`ResourceLimiter::table_growing`).
-        Ok(self.allow(desired.saturating_mul(size_of::<usize>())))
+        let element = size_of::<usize>();
+        Ok(self.allow(
+            current.saturating_mul(element),
+            desired.saturating_mul(element),
+        ))
     }
 }
 
@@ -334,6 +351,36 @@ mod tests {
                 .memory_growing(65_536 * 4, 65_536 * 5, None)
                 .unwrap()
         );
+        assert!(limiter.denied);
+    }
+
+    #[test]
+    fn a_growth_counts_only_the_bytes_it_adds() {
+        let mut limiter = MemoryLimiter::new(ByteSize::new(65_536 * 4));
+        assert!(limiter.memory_growing(0, 65_536 * 2, None).unwrap());
+        assert!(
+            limiter
+                .memory_growing(65_536 * 2, 65_536 * 4, None)
+                .unwrap()
+        );
+        assert!(!limiter.denied);
+    }
+
+    #[test]
+    fn memories_share_one_ceiling() {
+        let mut limiter = MemoryLimiter::new(ByteSize::new(65_536 * 4));
+        assert!(limiter.memory_growing(0, 65_536 * 3, None).unwrap());
+        assert!(!limiter.memory_growing(0, 65_536 * 2, None).unwrap());
+        assert!(limiter.denied);
+        // The denied growth was not counted: what is left still fits.
+        assert!(limiter.memory_growing(0, 65_536, None).unwrap());
+    }
+
+    #[test]
+    fn memories_and_tables_share_one_ceiling() {
+        let mut limiter = MemoryLimiter::new(ByteSize::new(65_536));
+        assert!(limiter.memory_growing(0, 65_536, None).unwrap());
+        assert!(!limiter.table_growing(0, 1, None).unwrap());
         assert!(limiter.denied);
     }
 
