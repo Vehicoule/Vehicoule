@@ -109,151 +109,22 @@ A call returns either the plugin's value or one `PluginFailure`, typed and `#[no
 The host reports; the core decides. The host never retries, never falls back to another plugin and never hides a
 failure behind a default value.
 
-## 8. Contract 0.1.0 (draft)
+## 8. Contract 0.1.0
 
 Written in WIT. Durations are milliseconds in `u64` fields named `-ms`, because WIT has no duration type; the host
 converts them to `std::time::Duration` at the boundary, and no bare integer reaches a public Rust API. Ids are the
 provider's own, opaque to the host and the core; the core maps them to its own library ids.
 
-```wit
-package vehicoule:plugin@0.1.0;
+The contract is [`wit/plugin.wit`](../wit/plugin.wit), its only copy. Its shape: an interface `types` (no
+function), the two host interfaces a plugin may import (`http`, `log`), the `plugin` interface every plugin exports
+(`describe`), one interface per capability, a world `base` and one world per capability that includes it. A plugin's
+own world includes the capability worlds it provides, for example
+`world example { include search-plugin; include resolve-plugin; }`, so it exports exactly those interfaces.
 
-interface types {
-  enum domain { music, video, books }
-  enum capability { search, metadata, resolve, radio, artwork, lyrics, link-import }
-
-  record artwork { url: string, width: option<u32>, height: option<u32> }
-  record artist-ref { id: string, name: string }
-  record album-ref { id: string, title: string }
-  record track {
-    id: string,
-    title: string,
-    artists: list<artist-ref>,
-    album: option<album-ref>,
-    duration-ms: option<u64>,
-    isrc: option<string>,
-    artwork: list<artwork>,
-  }
-  record album { id: string, title: string, artists: list<artist-ref>, year: option<u16>, artwork: list<artwork> }
-  record artist { id: string, name: string, artwork: list<artwork> }
-  record playlist { id: string, title: string, owner: option<string>, artwork: list<artwork> }
-
-  variant item { track(track), album(album), artist(artist), playlist(playlist) }
-  enum item-kind { track, album, artist, playlist }
-
-  variant error {
-    not-found,
-    unsupported,
-    rate-limited(option<u64>),   // retry-after-ms, as told by the service; the core decides what to do with it
-    invalid-input(string),
-    upstream(string),            // the service failed or answered something the plugin cannot read
-  }
-}
-
-interface http {
-  enum method { get, head, post }
-  record request { method: method, url: string, headers: list<tuple<string, string>>, body: option<list<u8>> }
-  record response { status: u16, headers: list<tuple<string, string>>, body: list<u8> }
-  variant http-error { refused-host, refused-scheme, budget-exceeded, timeout, transport(string) }
-  fetch: func(req: request) -> result<response, http-error>;
-}
-
-interface log {
-  enum level { debug, info, warn, error }
-  log: func(level: level, message: string);
-}
-
-interface plugin {
-  use types.{domain, capability};
-  record manifest {
-    id: string,
-    name: string,
-    version: string,
-    domains: list<domain>,
-    capabilities: list<capability>,
-    http-hosts: list<string>,
-  }
-  describe: func() -> manifest;
-}
-
-interface search {
-  use types.{item, item-kind, error};
-  record page { items: list<item>, next: option<string> }
-  search: func(query: string, kinds: list<item-kind>, cursor: option<string>) -> result<page, error>;
-  suggest: func(prefix: string) -> result<list<string>, error>;
-}
-
-interface metadata {
-  use types.{track, album, artist, playlist, error};
-  record album-page { album: album, tracks: list<track> }
-  record artist-page { artist: artist, top-tracks: list<track>, albums: list<album> }
-  record playlist-page { playlist: playlist, tracks: list<track>, next: option<string> }
-  get-album: func(id: string) -> result<album-page, error>;
-  get-artist: func(id: string) -> result<artist-page, error>;
-  get-playlist: func(id: string, cursor: option<string>) -> result<playlist-page, error>;
-}
-
-interface resolve {
-  use types.{track, error};
-  record request {
-    track: track,                 // what to find; from this plugin or from another one
-    rejected: list<string>,       // ids the user said were the wrong match, never to be returned again
-    preferred: option<string>,    // an id the user chose as the right match
-  }
-  record playable {
-    url: string,
-    headers: list<tuple<string, string>>,
-    mime: option<string>,
-    valid-for-ms: option<u64>,    // relative, so the plugin needs no clock; the edge turns it into an expiry
-    matched-id: string,           // which provider item was chosen, so the user can reject it
-  }
-  resolve: func(req: request) -> result<playable, error>;
-}
-
-interface radio {
-  use types.{track, error};
-  continuation: func(seed: track, exclude: list<string>, count: u32) -> result<list<track>, error>;
-}
-
-interface artwork {
-  use types.{item, artwork, error};
-  find: func(of: item) -> result<list<artwork>, error>;
-}
-
-interface lyrics {
-  use types.{track, error};
-  record line { start-ms: u64, text: string }
-  variant text { plain(string), synced(list<line>) }
-  find: func(of: track) -> result<text, error>;
-}
-
-interface link-import {
-  use types.{item, error};
-  import-link: func(url: string) -> result<item, error>;
-}
-
-// What every plugin imports and exports.
-world base {
-  import http;
-  import log;
-  export plugin;
-}
-
-// One world per capability. A plugin's own world includes the ones it provides, for example
-// `world example { include search-plugin; include resolve-plugin; }`, so it exports exactly those interfaces.
-world search-plugin { include base; export search; }
-world metadata-plugin { include base; export metadata; }
-world resolve-plugin { include base; export resolve; }
-world radio-plugin { include base; export radio; }
-world artwork-plugin { include base; export artwork; }
-world lyrics-plugin { include base; export lyrics; }
-world link-import-plugin { include base; export link-import; }
-```
-
-The draft above parses with `wasm-tools component wit` 1.263.0. How the host binds an interface that a plugin may or
-may not export (Wasmtime's `bindgen!` per interface, then a lookup in the component's exports) is checked against
-Wasmtime's source at the pinned version in the host's first pull request; if it cannot be done without inventing an
-API, every capability becomes a required export answering `unsupported`, and this section is changed first.
+CI parses it with `wasm-tools component wit` at the version pinned in the workflow. How the host binds an interface that a plugin may or may not export was checked with `wasmtime` 48.0.8: `bindgen!`
+on a capability world generates, per exported interface, a `GuestIndices::new` that returns an error when the
+component does not export that interface, and `Component::get_export_index` finds an export by name before
+instantiation. The host binds each capability world and reads which interfaces a plugin exports from these lookups.
 
 Versioning: the package follows semver. While it is `0.x`, the host accepts exactly the minor version it was built
 with. A change to the contract is a pull request that changes `wit/`, the host and its tests together, and the plugins
