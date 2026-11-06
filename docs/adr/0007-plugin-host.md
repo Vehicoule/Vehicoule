@@ -1,6 +1,6 @@
 # 0007. Run content plugins as Wasm components in Wasmtime, with no WASI
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-06
 - Deciders: the user
 
@@ -74,10 +74,12 @@ Facts, read on 2026-11-06:
 
 ## Decision
 
-Recommended: Wasmtime with the component model, no WASI, pinned to the LTS (48.x), with `default-features = false`
-and only the features the host uses (`runtime`, `component-model`, `cranelift`; `pulley` added for iOS when iOS
-starts). Wasmtime is a dependency exposed to untrusted content and builds a small C file, so it needs the user's
-explicit agreement (AGENTS.md rule 11, ADR 0005).
+Wasmtime with the component model, no WASI, pinned to the LTS (48.x), with `default-features = false` and only the
+features the host uses (`runtime`, `component-model`, `cranelift`; `pulley` added for iOS when iOS starts). The user
+agreed on 2026-11-06 to this dependency, which is exposed to untrusted content and builds a small C file (AGENTS.md
+rule 11, ADR 0005), after comparing it with Wasmer and with Wasmtime's non-LTS releases, whose support tiers for
+Android and iOS are the same (`docs/stability-tiers.md` at `v48.0.0`, `v50.0.1`, `v51.0.0-rc.1`). The user left the
+choice of WASI to Claude, who took option 1.
 
 ## Consequences
 

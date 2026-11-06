@@ -1,6 +1,6 @@
 # Plugin host spec: the WIT contract and the sandbox
 
-- Status: Proposed
+- Status: Accepted (the user, 2026-11-06)
 - Scope: the plugin host (an edge crate) and version 0.1.0 of the contract between the host and the plugins. The
   routing between plugins is the core's and comes in the core's own spec; feeds, signatures and installation from a
   feed come in their own spec.
@@ -279,20 +279,21 @@ Measurements for the budgets: once a real plugin runs, the host records each cal
 request count and output size, in release builds on the Xiaomi 14 and the Mac; each budget is then set above the worst
 measured case with a margin the user chooses, in an ADR, the same method as the core's deadlines.
 
-## 10. Questions for the user
+## 10. Decisions
 
-1. **Where things live**: the default in section 2 (contract and host in `Vehicoule`, plugins in
-   `vehicoule-plugins` and `vehicoule-plugins-extra`)?
-2. **Wasmtime**: agreement to add it (ADR 0007), pinned to the LTS 48.x.
-3. **No WASI**: left to Claude by the user on 2026-11-06; taken: plugins get only the contract's `http` and `log`.
-4. **First music plugin**: the published plugins are `deezer`, `itunes`, `lrclib` and `ytmusic`. Only `ytmusic`
-   resolves a full track to a stream, so it is the only one that tests the whole chain (search, resolve, play,
-   radio); the three others give metadata, artwork and lyrics.
-   Accepted by the user on 2026-11-06: `ytmusic` first, in `vehicoule-plugins-extra`.
+Answered by the user on 2026-11-06:
+
+1. **Where things live**: section 2. The user said what `vehicoule-plugins-extra` is for and raised no objection to
+   the rest of the layout.
+2. **Wasmtime**: agreed, pinned to the LTS 48.x (ADR 0007).
+3. **No WASI**: left to Claude; taken: plugins get only the contract's `http` and `log`.
+4. **First music plugin**: `ytmusic`, in `vehicoule-plugins-extra`. The published plugins are `deezer`, `itunes`,
+   `lrclib` and `ytmusic`; only `ytmusic` resolves a full track to a stream, so it is the only one that tests the
+   whole chain (search, resolve, play, radio). The three others give metadata, artwork and lyrics.
 
 ## 11. Order of the work
 
-Each step is one pull request with its tests, after the answers above:
+Each step is one pull request with its tests:
 
 1. `wit/` with the contract, and a CI step that parses it at a pinned tool version.
 2. The host: compile, check imports, `describe`, manifest validation, and the sandbox tests of section 9.
