@@ -32,7 +32,7 @@ Proposed default, to be confirmed by the user (section 10):
 | The host, `crates/vehicoule-plugin-host` | `Vehicoule/Vehicoule` |
 | Test plugins that misbehave on purpose (section 8) | `Vehicoule/Vehicoule`, under the host crate, built in CI |
 | Real plugins, one crate each, and their feed | `Vehicoule/vehicoule-plugins`, building against a copy of `wit/` pinned to a Vehicoule commit and checked by a sync script, as `nsh-m3e` does for NSH's skills |
-| `Vehicoule/vehicoule-plugins-extra` | Its purpose is not written anywhere yet; nothing goes there until the user says what it is for |
+| Plugins exposed to DMCA takedowns (`ytmusic`) | `Vehicoule/vehicoule-plugins-extra`, said by the user on 2026-11-06; later mirrored on GitLab and Codeberg under the same user and name, so its build and its copy of `wit/` must not depend on GitHub-only features |
 
 ## 3. Plugin lifecycle
 
@@ -281,11 +281,13 @@ measured case with a margin the user chooses, in an ADR, the same method as the 
 
 ## 10. Questions for the user
 
-1. **Where things live**: the default in section 2 (contract and host in `Vehicoule`, real plugins in
-   `vehicoule-plugins`)? And what is `vehicoule-plugins-extra` for?
+1. **Where things live**: the default in section 2 (contract and host in `Vehicoule`, plugins in
+   `vehicoule-plugins` and `vehicoule-plugins-extra`)?
 2. **Wasmtime**: agreement to add it (ADR 0007), pinned to the LTS 48.x.
 3. **No WASI**: plugins get only the contract's `http` and `log` (ADR 0007, option 1)?
-4. **First music plugin**: which service? It decides what the first real end-to-end test can play.
+4. **First music plugin**: the published plugins are `deezer`, `itunes`, `lrclib` and `ytmusic`. Only `ytmusic`
+   resolves a full track to a stream, so it is the only one that tests the whole chain (search, resolve, play,
+   radio); the three others give metadata, artwork and lyrics.
 
 ## 11. Order of the work
 
