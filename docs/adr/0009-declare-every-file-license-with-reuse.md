@@ -1,6 +1,6 @@
 # 0009. Declare every file's license with REUSE, checked in CI
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-06
 - Deciders: the user
 
@@ -28,8 +28,8 @@ a new file, vendored or not, says under which license it is.
 
 ## Decision
 
-Recommended: option 2. The copyright text of our own files is "The Vehicoule contributors", whose authors are recorded
-by Git; the user confirms this wording.
+Option 2, `REUSE.toml` alone. The user agreed to the check on 2026-11-06 and chose the copyright text of our own
+files the same day: "The Vehicoule contributors", whose authors are recorded by Git.
 
 ## Consequences
 
