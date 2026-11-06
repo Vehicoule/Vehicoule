@@ -1,0 +1,1 @@
+# cargo-mutants configuration (ADR 0004). Every surviving mutant fails CI.
