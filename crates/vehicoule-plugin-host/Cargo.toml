@@ -1,0 +1,20 @@
+[package]
+name = "vehicoule-plugin-host"
+description = "Runs Vehicoule's content plugins as Wasm components, in a sandbox with budgets"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+semver.workspace = true
+thiserror.workspace = true
+wasmtime.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

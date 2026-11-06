@@ -13,12 +13,14 @@ publish = false
 # Every dependency is declared here once; crates write `.workspace = true`.
 # Adding one needs a one-line justification in the pull request (AGENTS.md rule 11).
 [workspace.dependencies]
-# Typed errors without hand-written `Display` and `Error` impls (AGENTS.md rule 9). Pure Rust, no transitive
-# dependency beyond its proc-macro crates.
-thiserror = "2.0.21"
-# Property tests over long random operation sequences (ADR 0004). Test-only; without the default `fork` and `timeout`
-# features, which pull in process and temp-file crates the tests do not need (same choice as nsh-m3e).
-proptest = { version = "1.12.0", default-features = false, features = ["std"] }
+# Typed errors in library code (AGENTS.md rule 9). Already in Wasmtime's graph.
+thiserror = "=2.0.21"
+# Validates a plugin's semver version (docs/plugin-host-spec.md, section 4). Already in Wasmtime's graph.
+semver = "=1.0.28"
+# The plugin runtime (ADR 0007, accepted 2026-11-06): the LTS line, only the features the host uses.
+wasmtime = { version = "=48.0.8", default-features = false, features = ["runtime", "component-model", "cranelift", "std"] }
+# Property tests (ADR 0004).
+proptest = "=1.12.0"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
