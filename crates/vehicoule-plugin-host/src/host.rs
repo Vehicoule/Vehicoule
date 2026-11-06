@@ -1,5 +1,5 @@
 //! Installing a plugin: size, compilation, imports, `describe`, manifest, exports (docs/plugin-host-spec.md,
-//! sections 3 to 5).
+//! sections 3 to 5); and the store every call into a plugin gets, with its budgets (section 6).
 
 use thiserror::Error;
 use wasmtime::component::{Component, HasSelf, InstancePre, Linker};
@@ -7,7 +7,7 @@ use wasmtime::{Engine, ResourceLimiter, Store, Trap};
 
 use crate::bindings::base::vehicoule::plugin::{http, log, types};
 use crate::bindings::{artwork, base, link_import, lyrics, metadata, radio, resolve, search};
-use crate::{ByteSize, Capability, Domain, HostConfig, Manifest, ManifestError};
+use crate::{ByteSize, Capability, Domain, HostConfig, Manifest, ManifestError, PluginFailure};
 
 /// The only imports a plugin may have (section 5).
 const ALLOWED_IMPORTS: [&str; 3] = [
@@ -71,12 +71,19 @@ pub enum InstallError {
     Runtime(String),
 }
 
-/// A plugin that passed every install check.
-#[derive(Debug)]
+/// A plugin that passed every install check, ready to be called.
 pub struct InstalledPlugin {
     manifest: Manifest,
-    // Kept for the capability calls of the next step (docs/plugin-host-spec.md, section 11).
-    _component: Component,
+    // Compiled and linked once; each call instantiates it in a fresh store.
+    pre: InstancePre<CallState>,
+}
+
+impl std::fmt::Debug for InstalledPlugin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InstalledPlugin")
+            .field("manifest", &self.manifest)
+            .finish_non_exhaustive()
+    }
 }
 
 impl InstalledPlugin {
@@ -88,7 +95,7 @@ impl InstalledPlugin {
 }
 
 /// The state of one store: one call, then dropped (section 3).
-struct CallState {
+pub(crate) struct CallState {
     limiter: MemoryLimiter,
 }
 
@@ -186,7 +193,12 @@ impl PluginHost {
     /// ```
     /// use vehicoule_plugin_host::{ByteSize, Fuel, HostConfig, PluginHost};
     ///
-    /// let host = PluginHost::new(HostConfig::new(ByteSize::new(1 << 20), Fuel::new(1_000_000), ByteSize::new(16 << 20)));
+    /// let host = PluginHost::new(HostConfig::new(
+    ///     ByteSize::new(1 << 20),
+    ///     Fuel::new(1_000_000),
+    ///     ByteSize::new(16 << 20),
+    ///     ByteSize::new(1 << 20),
+    /// ));
     /// assert!(host.is_ok());
     /// ```
     pub fn new(config: HostConfig) -> Result<Self, HostError> {
@@ -247,17 +259,31 @@ impl PluginHost {
                 });
             }
         }
-        Ok(InstalledPlugin {
-            manifest,
-            _component: component,
-        })
+        Ok(InstalledPlugin { manifest, pre })
     }
 
-    /// Calls `describe` in a fresh store, with every request refused and the call's budgets.
-    fn describe(
+    /// The budgets this host enforces.
+    pub(crate) fn config(&self) -> &HostConfig {
+        &self.config
+    }
+
+    /// Runs `call` against a fresh instance of `plugin` if it provides `capability`, in a fresh store with the call's
+    /// budgets, and names what stopped it if it did not return.
+    pub(crate) fn call<R>(
         &self,
-        pre: &InstancePre<CallState>,
-    ) -> Result<base::exports::vehicoule::plugin::plugin::Manifest, InstallError> {
+        plugin: &InstalledPlugin,
+        capability: Capability,
+        call: impl FnOnce(&mut Store<CallState>, &InstancePre<CallState>) -> wasmtime::Result<R>,
+    ) -> Result<R, PluginFailure> {
+        if !plugin.manifest.capabilities().contains(&capability) {
+            return Err(PluginFailure::NotProvided(capability));
+        }
+        let mut store = self.store().map_err(|e| Stop::Runtime(e.to_string()))?;
+        call(&mut store, &plugin.pre).map_err(|e| stop(&e, &store).into())
+    }
+
+    /// A store for one call: its own memory ceiling and its own fuel.
+    fn store(&self) -> wasmtime::Result<Store<CallState>> {
         let mut store = Store::new(
             &self.engine,
             CallState {
@@ -265,28 +291,65 @@ impl PluginHost {
             },
         );
         store.limiter(|state| &mut state.limiter);
-        store
-            .set_fuel(self.config.fuel_per_call.get())
+        store.set_fuel(self.config.fuel_per_call.get())?;
+        Ok(store)
+    }
+
+    /// Calls `describe` in a fresh store, with every request refused and the call's budgets.
+    fn describe(
+        &self,
+        pre: &InstancePre<CallState>,
+    ) -> Result<base::exports::vehicoule::plugin::plugin::Manifest, InstallError> {
+        let mut store = self
+            .store()
             .map_err(|e| InstallError::Runtime(e.to_string()))?;
-        let plugin = base::BasePre::new(pre.clone())
+        base::BasePre::new(pre.clone())
             .and_then(|pre| pre.instantiate(&mut store))
-            .map_err(|e| failure(&e, &store))?;
-        plugin
-            .vehicoule_plugin_plugin()
-            .call_describe(&mut store)
-            .map_err(|e| failure(&e, &store))
+            .and_then(|plugin| plugin.vehicoule_plugin_plugin().call_describe(&mut store))
+            .map_err(|e| stop(&e, &store).into())
     }
 }
 
-/// Names a failure of instantiation or of a call, the memory limit first since a denied growth surfaces as a trap.
-fn failure(error: &wasmtime::Error, store: &Store<CallState>) -> InstallError {
+/// What stopped a plugin that did not return, at install or in a call.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Stop {
+    FuelExhausted,
+    MemoryLimit,
+    Trap(String),
+    Runtime(String),
+}
+
+impl From<Stop> for InstallError {
+    fn from(stop: Stop) -> Self {
+        match stop {
+            Stop::FuelExhausted => Self::FuelExhausted,
+            Stop::MemoryLimit => Self::MemoryLimit,
+            Stop::Trap(trap) => Self::Trap(trap),
+            Stop::Runtime(error) => Self::Runtime(error),
+        }
+    }
+}
+
+impl From<Stop> for PluginFailure {
+    fn from(stop: Stop) -> Self {
+        match stop {
+            Stop::FuelExhausted => Self::FuelExhausted,
+            Stop::MemoryLimit => Self::MemoryLimit,
+            Stop::Trap(trap) => Self::Trap(trap),
+            Stop::Runtime(error) => Self::Runtime(error),
+        }
+    }
+}
+
+/// Names what stopped instantiation or a call, the memory limit first since a denied growth surfaces as a trap.
+fn stop(error: &wasmtime::Error, store: &Store<CallState>) -> Stop {
     if store.data().limiter.denied {
-        return InstallError::MemoryLimit;
+        return Stop::MemoryLimit;
     }
     match error.downcast_ref::<Trap>() {
-        Some(Trap::OutOfFuel) => InstallError::FuelExhausted,
-        Some(trap) => InstallError::Trap(trap.to_string()),
-        None => InstallError::Runtime(error.to_string()),
+        Some(Trap::OutOfFuel) => Stop::FuelExhausted,
+        Some(trap) => Stop::Trap(trap.to_string()),
+        None => Stop::Runtime(error.to_string()),
     }
 }
 

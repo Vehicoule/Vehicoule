@@ -15,7 +15,7 @@ publish = false
 crate-type = ["cdylib"]
 
 [features]
-# A plugin that follows the contract and provides `search`.
+# A plugin that follows the contract and provides `search`, whose query picks how it behaves (see `src/lib.rs`).
 good = []
 # Imports an interface outside the contract.
 extra-import = []

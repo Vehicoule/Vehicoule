@@ -3,38 +3,10 @@
 //! The plugins are built by `scripts/build-plugin-fixtures.sh` into the directory named by
 //! `VEHICOULE_PLUGIN_FIXTURES`. A missing directory fails the tests: they are never skipped.
 
-use std::path::PathBuf;
+mod common;
 
-use vehicoule_plugin_host::{
-    ByteSize, Capability, Domain, Fuel, HostConfig, HostError, InstallError, ManifestError,
-    PluginHost,
-};
-
-/// Arbitrary budgets, large enough for a well-behaved plugin (the spec gives no value; tests choose).
-const MAX_PLUGIN_SIZE: u64 = 8 << 20;
-const FUEL: u64 = 50_000_000;
-const MAX_MEMORY: u64 = 32 << 20;
-
-/// The bytes of a test plugin; an error names what is missing, and the calling test unwraps it and fails.
-fn fixture(name: &str) -> Result<Vec<u8>, String> {
-    let dir = std::env::var_os("VEHICOULE_PLUGIN_FIXTURES").ok_or(
-        "VEHICOULE_PLUGIN_FIXTURES must name the output of scripts/build-plugin-fixtures.sh",
-    )?;
-    let path = PathBuf::from(dir).join(format!("{name}.wasm"));
-    std::fs::read(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))
-}
-
-fn host_with(max_plugin_size: u64) -> Result<PluginHost, HostError> {
-    PluginHost::new(HostConfig::new(
-        ByteSize::new(max_plugin_size),
-        Fuel::new(FUEL),
-        ByteSize::new(MAX_MEMORY),
-    ))
-}
-
-fn host() -> Result<PluginHost, HostError> {
-    host_with(MAX_PLUGIN_SIZE)
-}
+use common::{fixture, host, host_with};
+use vehicoule_plugin_host::{ByteSize, Capability, Domain, InstallError, ManifestError};
 
 #[test]
 fn a_plugin_that_follows_the_contract_installs_with_its_manifest() {
@@ -192,4 +164,15 @@ fn memories_that_each_fit_but_together_exceed_the_ceiling_are_stopped() {
         .install(&fixture("multi-memory").unwrap())
         .unwrap_err();
     assert!(matches!(error, InstallError::MemoryLimit), "{error:?}");
+}
+
+#[test]
+fn an_installed_plugin_debugs_as_its_manifest() {
+    let plugin = host().unwrap().install(&fixture("good").unwrap()).unwrap();
+    let debug = format!("{plugin:?}");
+    assert!(
+        debug.starts_with("InstalledPlugin { manifest: Manifest {"),
+        "{debug}"
+    );
+    assert!(debug.contains("\"fixture\""), "{debug}");
 }
