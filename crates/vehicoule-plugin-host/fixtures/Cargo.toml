@@ -1,0 +1,43 @@
+# Test plugins that the host's tests install (docs/plugin-host-spec.md, section 9). Each feature builds one behavior;
+# `scripts/build-plugin-fixtures.sh` builds every feature for `wasm32-unknown-unknown` and turns it into a component.
+# Its own workspace: it targets Wasm, is never shipped, and must not join the app's dependency graph.
+[workspace]
+
+[package]
+name = "vehicoule-plugin-fixtures"
+description = "Plugins that behave well or badly on purpose, for the plugin host's tests"
+version = "0.0.0"
+edition = "2024"
+license = "GPL-3.0-only"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+# A plugin that follows the contract and provides `search`.
+good = []
+# Imports an interface outside the contract.
+extra-import = []
+# Never returns from `describe`.
+endless-loop = []
+# Grows its memory without bound in `describe`.
+memory-bomb = []
+# Panics in `describe`, which traps.
+trap = []
+# Tries a request in `describe` and says in its name whether the host refused it.
+fetch-in-describe = []
+# Declares `resolve` in its manifest without exporting it.
+declares-missing-export = []
+# Exports `search` without declaring it in its manifest.
+undeclared-export = []
+# Declares a host pattern the manifest rules forbid.
+bad-host-pattern = []
+
+[dependencies]
+# Generates the guest side of the contract; the host side is Wasmtime's `bindgen!`.
+wit-bindgen = { version = "=0.63.0", default-features = false, features = ["macros", "realloc"] }
+
+[profile.release]
+opt-level = "s"
+panic = "abort"

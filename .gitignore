@@ -1,3 +1,4 @@
 /target
 .DS_Store
 mutants.out*/
+/crates/vehicoule-plugin-host/fixtures/target
