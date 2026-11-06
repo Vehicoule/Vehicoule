@@ -15,7 +15,7 @@ publish = false
 crate-type = ["cdylib"]
 
 [features]
-# A plugin that follows the contract and provides `search`.
+# A plugin that follows the contract and provides `search`, whose query picks how it behaves (see `src/lib.rs`).
 good = []
 # Imports an interface outside the contract.
 extra-import = []
@@ -33,6 +33,8 @@ declares-missing-export = []
 undeclared-export = []
 # Declares a host pattern the manifest rules forbid.
 bad-host-pattern = []
+# Returns a manifest with more text than the tests' output ceiling.
+huge-manifest = []
 
 [dependencies]
 # Generates the guest side of the contract; the host side is Wasmtime's `bindgen!`.
