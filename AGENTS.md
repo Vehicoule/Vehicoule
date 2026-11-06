@@ -77,6 +77,7 @@ cargo test --workspace --locked
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
 cargo deny check
 cargo mutants --workspace --cargo-arg=--locked   # cargo-mutants 27.1.0
+wasm-tools component wit wit/ > /dev/null       # wasm-tools 1.263.0, the plugin contract parses
 ```
 
 Kani joins this list with the first proof harness ([ADR 0004](docs/adr/0004-verification.md)). The toolchain is pinned
@@ -88,6 +89,7 @@ ran.
 | Path | What it holds |
 |---|---|
 | `crates/vehicoule-core/` | The core: app state, queue, player model. No UI, no I/O |
+| `wit/` | The plugin contract, in WIT ([spec](docs/plugin-host-spec.md)) |
 | `docs/adr/` | Decisions, numbered, one per file ([template](docs/adr/0000-template.md)) |
 | `docs/` | Specs and references |
 | `reference/` | Vendored sources of truth, pinned, never edited by hand |

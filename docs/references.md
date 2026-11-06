@@ -22,6 +22,7 @@ site may describe a newer version than the one this repository builds against.
 | Dependency checks | https://embarkstudios.github.io/cargo-deny/ | `EmbarkStudios/cargo-deny-action` v2.1.1, by SHA in CI |
 | Bounded model checking | https://model-checking.github.io/kani/ | to pin with the first proof harness ([ADR 0004](adr/0004-verification.md)) |
 | Property tests | https://docs.rs/proptest | to pin with the first property test |
+| WIT parser (plugin contract) | https://github.com/bytecodealliance/wasm-tools | `1.263.0`, installed by CI (`.github/workflows/ci.yml`) |
 
 ## NSH and the component library
 
