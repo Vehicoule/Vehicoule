@@ -4,17 +4,20 @@
 //!
 //! - **Position logic, for any length.** Every move through the play order goes through `position_forward`,
 //!   `position_back` and `position_after`, and every shuffle through `fisher_yates`. Their proofs take any length and
-//!   any position, so a move can never point outside the queue (invariant 1) and a shuffled order is always a
-//!   permutation (invariant 3), whatever the queue's size.
-//! - **Whole operations, inductively, on small queues.** Starting from *any* queue that satisfies the invariants, the
-//!   operation keeps them. Kani's cost grows fast with each `Vec` insertion, removal or collection: on 2 and 3 entries,
-//!   `replace`, `play_next`, `append`, `remove`, `move_to`, `shuffle` and navigation ran out of the 16 GB of memory or
-//!   past 150 s each (measured on 2026-11-06, Kani 0.68.0, a 4-core 16 GB Linux container, one run each). Only
-//!   `clear` and `unshuffle` verify (22 s and 38 s on 3 entries). The other operations are checked as whole
-//!   operations by the property tests in `tests.rs` (long random sequences, every invariant after every step) and by
-//!   mutation testing.
+//!   any position, so a move can never point outside the queue and a shuffled order is always a permutation, whatever
+//!   the queue's size.
+//! - **Every operation, inductively, on small queues.** Starting from *any* queue of 0 to 3 entries that satisfies the
+//!   invariants, with any current entry, repeat mode, shuffled order and next id, and with any arguments, each
+//!   operation keeps the invariants, loses or duplicates no entry (invariant 5), and leaves the queue unchanged when it
+//!   refuses. Operations that add entries are proved with 0 to 2 new entries, from the first free id; that they refuse
+//!   exactly when the ids run out is proved from every next id that leaves too few free ids, or just enough.
 //!
 //! Kani also proves that none of this code panics on these inputs.
+//!
+//! The cost of these proofs comes from the heap and from values Kani cannot fold. Every `Vec` the code allocates, and
+//! every write at a place that depends on symbolic data, multiplies the cases of each pointer dereference. That is
+//! why the queue reads its play order in place, inserts rather than splices, moves entries by swapping neighbours,
+//! and compares ids rather than `checked_add`ing them.
 
 use super::*;
 
@@ -26,87 +29,403 @@ fn any_repeat() -> Repeat {
     }
 }
 
-/// The orders of three entries, by index, so the starting queues have at most three entries: every extra entry
-/// multiplies the cases, and the operations treat positions alike beyond the first, the last and the current one,
-/// which three entries already separate. Taking the indices below the length, in this order, gives every order of a
-/// shorter queue too.
-const ORDERS: [[usize; 3]; 6] = [
-    [0, 1, 2],
-    [0, 2, 1],
-    [1, 0, 2],
-    [1, 2, 0],
-    [2, 0, 1],
-    [2, 1, 0],
-];
+/// The starting queue, kept on the stack to check the queue against after an operation. Cloning the queue instead
+/// would add two heap objects, and every heap object multiplies the cost of each pointer dereference under Kani.
+struct Start {
+    len: usize,
+    entries: [Entry<u8>; 3],
+    current: Option<EntryId>,
+    repeat: Repeat,
+    /// The play order when shuffled.
+    order: Option<[EntryId; 3]>,
+    rng: SplitMix64,
+    next_id: u64,
+}
 
-/// Any queue of `len` entries that satisfies the invariants: any media, current entry, repeat mode, next id, and
-/// shuffle off or any shuffled order.
-fn any_valid_queue(len: usize) -> Queue<u8> {
-    let entries: Vec<Entry<u8>> = [EntryId(0), EntryId(1), EntryId(2)][..len]
-        .iter()
-        .map(|id| Entry {
-            id: *id,
-            media: kani::any(),
-            origin: Origin::Source,
-        })
-        .collect();
-    let next_id: u64 = kani::any();
-    kani::assume(next_id >= 3);
-    let current = if kani::any() {
-        let index: usize = kani::any();
-        kani::assume(index < len);
-        Some(EntryId(index as u64))
-    } else {
-        None
-    };
-    let shuffle = if kani::any() {
-        let which: usize = kani::any();
-        kani::assume(which < ORDERS.len());
-        let order = ORDERS[which]
-            .iter()
-            .filter(|i| **i < len)
-            .map(|i| EntryId(*i as u64))
-            .collect();
-        Shuffle::On {
-            order,
-            rng: SplitMix64::new(kani::any()),
+impl Start {
+    fn entries(&self) -> &[Entry<u8>] {
+        &self.entries[..self.len]
+    }
+
+    /// Entry ids are their index in the starting queue.
+    fn index_of(&self, id: EntryId) -> Option<usize> {
+        let index = id.0 as usize;
+        (index < self.len).then_some(index)
+    }
+
+    fn play_position(&self, id: EntryId) -> Option<usize> {
+        match &self.order {
+            Some(order) => order[..self.len].iter().position(|other| *other == id),
+            None => self.index_of(id),
         }
-    } else {
-        Shuffle::Off
-    };
-    Queue {
-        entries,
-        source: QueueSource::Selection,
-        current,
-        repeat: any_repeat(),
-        shuffle,
-        next_id,
+    }
+
+    /// Whether `queue` is exactly the starting queue.
+    fn is(&self, queue: &Queue<u8>) -> bool {
+        self.is_but_current(queue) && queue.current == self.current
+    }
+
+    /// Whether `queue` is the starting queue, except maybe for its current entry.
+    fn is_but_current(&self, queue: &Queue<u8>) -> bool {
+        let shuffle_is = match (&queue.shuffle, &self.order) {
+            (Shuffle::Off, None) => true,
+            (Shuffle::On { order, rng }, Some(start)) => {
+                order[..] == start[..self.len] && *rng == self.rng
+            }
+            _ => false,
+        };
+        queue.entries[..] == *self.entries()
+            && queue.source == QueueSource::Selection
+            && queue.repeat == self.repeat
+            && queue.next_id == self.next_id
+            && shuffle_is
+    }
+
+    /// Invariant 5: every starting entry is still in `queue`, which has exactly `added` more. With unique ids
+    /// (invariant 2), nothing was lost or duplicated.
+    fn all_kept_in(&self, queue: &Queue<u8>, added: usize) -> bool {
+        self.entries().iter().all(|e| queue.entry(e.id) == Some(e))
+            && queue.entries.len() == self.len + added
     }
 }
 
-fn ids(queue: &Queue<u8>) -> Vec<EntryId> {
-    queue.entries().iter().map(Entry::id).collect()
+/// Any queue of `len` entries (at most 3) that satisfies the invariants: any media, current entry, repeat mode, next
+/// id, and shuffle off or any shuffled order. Three entries already separate the first, the last and the current
+/// position, which is all the operations tell apart; every extra entry multiplies the cases.
+fn any_valid_queue(len: usize) -> (Queue<u8>, Start) {
+    let next_id: u64 = kani::any();
+    kani::assume(next_id >= 3);
+    valid_queue(len, next_id)
 }
 
-/// Invariants 1 to 3 after `clear`, from any valid queue.
+/// As [`any_valid_queue`], with the given next id.
+fn valid_queue(len: usize, next_id: u64) -> (Queue<u8>, Start) {
+    valid_queue_shuffled(len, next_id, kani::any())
+}
+
+/// As [`valid_queue`], shuffled or not as told.
+fn valid_queue_shuffled(len: usize, next_id: u64, shuffled: bool) -> (Queue<u8>, Start) {
+    let entries = [
+        Entry {
+            id: EntryId(0),
+            media: kani::any(),
+            origin: Origin::Source,
+        },
+        Entry {
+            id: EntryId(1),
+            media: kani::any(),
+            origin: Origin::Source,
+        },
+        Entry {
+            id: EntryId(2),
+            media: kani::any(),
+            origin: Origin::Source,
+        },
+    ];
+    kani::assume(len <= entries.len());
+    let current = if kani::any() {
+        let index: u64 = kani::any();
+        kani::assume(index < len as u64);
+        Some(EntryId(index))
+    } else {
+        None
+    };
+    let order = if shuffled {
+        // Any order: distinct picks below the length.
+        let picks: [u64; 3] = kani::any();
+        let mut order = [EntryId(0); 3];
+        for i in 0..len {
+            kani::assume(picks[i] < len as u64);
+            for j in 0..i {
+                kani::assume(picks[j] != picks[i]);
+            }
+            order[i] = EntryId(picks[i]);
+        }
+        Some(order)
+    } else {
+        None
+    };
+    let start = Start {
+        len,
+        entries: entries.clone(),
+        current,
+        repeat: any_repeat(),
+        order,
+        rng: SplitMix64::new(kani::any()),
+        next_id,
+    };
+    let queue = Queue {
+        entries: entries[..len].to_vec(),
+        source: QueueSource::Selection,
+        current,
+        repeat: start.repeat,
+        shuffle: match order {
+            Some(order) => Shuffle::On {
+                order: order[..len].to_vec(),
+                rng: start.rng.clone(),
+            },
+            None => Shuffle::Off,
+        },
+        next_id,
+    };
+    (queue, start)
+}
+
+/// Any id among those of the starting queue, plus one that is not in it.
+fn any_id() -> EntryId {
+    let id = EntryId(kani::any());
+    kani::assume(id.0 <= 3);
+    id
+}
+
+/// Invariant 4, as callers see it: with shuffle off, the play order is the queue order.
+fn play_order_is_queue_order(queue: &Queue<u8>) -> bool {
+    queue.is_shuffled()
+        || (0..queue.entries.len())
+            .all(|i| queue.play_id_at(i) == queue.entries.get(i).map(Entry::id))
+}
+
+fn holds(queue: &Queue<u8>) -> bool {
+    queue.invariants_hold() && play_order_is_queue_order(queue)
+}
+
+/// The smallest next id of a starting queue: operations that add entries are proved from it, because a symbolic next
+/// id makes every new id symbolic and the proofs run out of memory. The ids' values matter only where they run out,
+/// which the `ids_run_out` proofs check from every next id that leaves too few free ids, or just enough.
+const FIRST_FREE_ID: u64 = 3;
+
+/// Adding `ADDED` entries with `add` from a next id that leaves `LEFT` free ids: the operation refuses and changes
+/// nothing exactly when fewer than `ADDED` are left. The last id, `u64::MAX`, is never given out, since the next id
+/// must stay above every id given out.
+fn ids_run_out<const ADDED: usize, const LEFT: u64>(
+    len: usize,
+    add: impl Fn(&mut Queue<u8>, [u8; ADDED]) -> Result<(), QueueError>,
+) {
+    let (mut queue, start) = valid_queue(len, u64::MAX - LEFT);
+    let result = add(&mut queue, kani::any());
+    if LEFT < ADDED as u64 {
+        assert!(result == Err(QueueError::IdsExhausted));
+        assert!(start.is(&queue));
+    } else {
+        assert!(result.is_ok());
+        assert!(queue.next_id == u64::MAX);
+    }
+}
+
+fn replace<const ADDED: usize>(len: usize) {
+    let (mut queue, start) = valid_queue(len, FIRST_FREE_ID);
+    let media: [u8; ADDED] = kani::any();
+    let position: Option<usize> = kani::any();
+    match queue.replace(QueueSource::Collection(kani::any()), media, position) {
+        Ok(()) => {
+            assert!(holds(&queue));
+            assert!(queue.len() == ADDED);
+            assert!(
+                queue
+                    .entries
+                    .iter()
+                    .zip(media)
+                    .all(|(e, m)| e.media == m && e.origin == Origin::Source)
+            );
+            assert!(queue.current == position.and_then(|i| queue.entries.get(i)).map(Entry::id));
+            assert!(queue.is_shuffled() == start.order.is_some() && queue.repeat == start.repeat);
+        }
+        Err(_) => {
+            assert!(start.is(&queue));
+        }
+    }
+}
+
+/// `play_next` is proved in two halves, the queue in order and shuffled: proved at once, it runs out of memory.
+fn play_next_in_order<const ADDED: usize>(len: usize) {
+    play_next::<ADDED>(len, false);
+}
+
+fn play_next_shuffled<const ADDED: usize>(len: usize) {
+    play_next::<ADDED>(len, true);
+}
+
+fn play_next<const ADDED: usize>(len: usize, shuffled: bool) {
+    let (mut queue, start) = valid_queue_shuffled(len, FIRST_FREE_ID, shuffled);
+    let media: [u8; ADDED] = kani::any();
+    match queue.play_next(media) {
+        Ok(()) => {
+            assert!(holds(&queue));
+            assert!(start.all_kept_in(&queue, ADDED));
+            assert!(queue.current == start.current);
+            // The new entries come right after the current one, in their order, in the queue and the play order.
+            let at = index_after(start.current.and_then(|c| start.index_of(c)));
+            let play_at = index_after(start.current.and_then(|c| start.play_position(c)));
+            for (offset, m) in media.into_iter().enumerate() {
+                let entry = &queue.entries[at + offset];
+                assert!(entry.media == m && entry.origin == Origin::Manual);
+                assert!(queue.play_id_at(play_at + offset) == Some(entry.id));
+            }
+        }
+        Err(_) => {
+            assert!(start.is(&queue));
+        }
+    }
+}
+
+fn append<const ADDED: usize>(len: usize) {
+    let (mut queue, start) = valid_queue(len, FIRST_FREE_ID);
+    let media: [u8; ADDED] = kani::any();
+    let origin = if kani::any() {
+        Origin::Manual
+    } else {
+        Origin::Radio
+    };
+    match queue.append(media, origin) {
+        Ok(()) => {
+            assert!(holds(&queue));
+            assert!(start.all_kept_in(&queue, ADDED));
+            assert!(queue.current == start.current);
+            for (offset, m) in media.into_iter().enumerate() {
+                let entry = &queue.entries[len + offset];
+                assert!(entry.media == m && entry.origin == origin);
+                assert!(queue.play_id_at(len + offset) == Some(entry.id));
+            }
+        }
+        Err(_) => {
+            assert!(start.is(&queue));
+        }
+    }
+}
+
+fn remove(len: usize) {
+    let (mut queue, start) = any_valid_queue(len);
+    let id = any_id();
+    match queue.remove(id) {
+        Ok(()) => {
+            assert!(holds(&queue));
+            assert!(queue.entry(id).is_none());
+            assert!(
+                start
+                    .entries()
+                    .iter()
+                    .filter(|e| e.id != id)
+                    .all(|e| queue.entry(e.id) == Some(e))
+            );
+            assert!(queue.len() + 1 == len);
+            assert!(queue.current != Some(id));
+            if start.current != Some(id) {
+                assert!(queue.current == start.current);
+            }
+        }
+        Err(_) => {
+            assert!(start.is(&queue));
+        }
+    }
+}
+
+fn move_to(len: usize) {
+    let (mut queue, start) = any_valid_queue(len);
+    let id = any_id();
+    let position: usize = kani::any();
+    match queue.move_to(id, position) {
+        Ok(()) => {
+            assert!(holds(&queue));
+            assert!(start.all_kept_in(&queue, 0));
+            assert!(queue.play_id_at(position) == Some(id));
+            assert!(queue.current == start.current);
+            if queue.is_shuffled() {
+                assert!(queue.entries[..] == *start.entries());
+            }
+        }
+        Err(_) => {
+            assert!(start.is(&queue));
+        }
+    }
+}
+
 fn clear(len: usize) {
-    let mut queue = any_valid_queue(len);
+    let (mut queue, _) = any_valid_queue(len);
     queue.clear();
-    assert!(queue.invariants_hold());
+    assert!(holds(&queue));
     assert!(queue.is_empty() && queue.current().is_none());
 }
 
-/// Invariant 4: with shuffle off, the play order is the queue order; unshuffling keeps every entry and the current
-/// one.
+fn shuffle(len: usize) {
+    let (mut queue, start) = any_valid_queue(len);
+    queue.shuffle(kani::any());
+    assert!(holds(&queue));
+    assert!(queue.is_shuffled());
+    assert!(queue.entries[..] == *start.entries() && queue.current == start.current);
+    if let Some(current) = queue.current {
+        assert!(queue.play_id_at(0) == Some(current));
+    }
+}
+
 fn unshuffle(len: usize) {
-    let mut queue = any_valid_queue(len);
-    let before = queue.clone();
+    let (mut queue, start) = any_valid_queue(len);
     queue.unshuffle();
-    assert!(queue.invariants_hold());
-    assert!(queue.current == before.current);
-    let play: Vec<EntryId> = queue.play_order().iter().map(|e| e.id()).collect();
-    assert!(play == ids(&queue));
-    assert!(ids(&queue) == ids(&before));
+    assert!(holds(&queue));
+    assert!(!queue.is_shuffled());
+    assert!(queue.entries[..] == *start.entries() && queue.current == start.current);
+}
+
+fn set_repeat(len: usize) {
+    let (mut queue, start) = any_valid_queue(len);
+    let repeat = any_repeat();
+    queue.set_repeat(repeat);
+    assert!(holds(&queue));
+    assert!(queue.repeat == repeat);
+    assert!(queue.entries[..] == *start.entries() && queue.current == start.current);
+}
+
+fn next(len: usize) {
+    let (mut queue, start) = any_valid_queue(len);
+    let advance = if kani::any() {
+        Advance::Requested
+    } else {
+        Advance::Finished
+    };
+    let next = queue.next(advance);
+    assert!(holds(&queue));
+    assert!(start.is_but_current(&queue));
+    match next {
+        Some(id) => {
+            assert!(queue.current == Some(id));
+        }
+        None => {
+            assert!(queue.current == start.current);
+        }
+    }
+    if start.repeat == Repeat::One && advance == Advance::Finished && start.current.is_some() {
+        assert!(next == start.current);
+    }
+}
+
+fn previous(len: usize) {
+    let (mut queue, start) = any_valid_queue(len);
+    let previous = queue.previous();
+    assert!(holds(&queue));
+    assert!(start.is_but_current(&queue));
+    match previous {
+        Some(id) => {
+            assert!(queue.current == Some(id));
+            assert!(start.current != Some(id));
+        }
+        None => {
+            assert!(queue.current == start.current);
+        }
+    }
+}
+
+fn jump_to(len: usize) {
+    let (mut queue, start) = any_valid_queue(len);
+    let id = any_id();
+    match queue.jump_to(id) {
+        Ok(()) => {
+            assert!(holds(&queue));
+            assert!(queue.current == Some(id));
+            assert!(start.is_but_current(&queue));
+        }
+        Err(_) => {
+            assert!(start.is(&queue));
+        }
+    }
 }
 
 // Position logic, for any length.
@@ -171,7 +490,7 @@ fn fisher_yates_is_a_permutation() {
     assert!(ids[len..] == original[len..]);
 }
 
-// Whole operations, inductively, on small queues.
+// Every operation, inductively, on small queues.
 
 /// One proof per starting length: Kani reasons far better about concrete lengths than about a symbolic one.
 macro_rules! proofs_for_each_length {
@@ -179,25 +498,25 @@ macro_rules! proofs_for_each_length {
         $(
             mod $check {
                 #[kani::proof]
-                #[kani::unwind(8)]
+                #[kani::unwind(6)]
                 fn from_0_entries() {
                     super::$check(0);
                 }
 
                 #[kani::proof]
-                #[kani::unwind(8)]
+                #[kani::unwind(6)]
                 fn from_1_entry() {
                     super::$check(1);
                 }
 
                 #[kani::proof]
-                #[kani::unwind(8)]
+                #[kani::unwind(6)]
                 fn from_2_entries() {
                     super::$check(2);
                 }
 
                 #[kani::proof]
-                #[kani::unwind(8)]
+                #[kani::unwind(6)]
                 fn from_3_entries() {
                     super::$check(3);
                 }
@@ -206,4 +525,106 @@ macro_rules! proofs_for_each_length {
     };
 }
 
-proofs_for_each_length!(clear, unshuffle);
+/// One proof per starting length and number of added entries, 0 to 2.
+macro_rules! proofs_for_each_length_and_added {
+    ($($check:ident $(with $solver:ident)?),* $(,)?) => {
+        $(
+            mod $check {
+                proofs_for_each_length_and_added!(@added $check, adding_0, 0 $(, $solver)?);
+                proofs_for_each_length_and_added!(@added $check, adding_1, 1 $(, $solver)?);
+                proofs_for_each_length_and_added!(@added $check, adding_2, 2 $(, $solver)?);
+            }
+        )*
+    };
+    (@added $check:ident, $module:ident, $added:literal $(, $solver:ident)?) => {
+        mod $module {
+            #[kani::proof]
+            #[kani::unwind(6)]
+            $(#[kani::solver($solver)])?
+            fn from_0_entries() {
+                super::super::$check::<$added>(0);
+            }
+
+            #[kani::proof]
+            #[kani::unwind(6)]
+            $(#[kani::solver($solver)])?
+            fn from_1_entry() {
+                super::super::$check::<$added>(1);
+            }
+
+            #[kani::proof]
+            #[kani::unwind(6)]
+            $(#[kani::solver($solver)])?
+            fn from_2_entries() {
+                super::super::$check::<$added>(2);
+            }
+
+            #[kani::proof]
+            #[kani::unwind(6)]
+            $(#[kani::solver($solver)])?
+            fn from_3_entries() {
+                super::super::$check::<$added>(3);
+            }
+        }
+    };
+}
+
+proofs_for_each_length!(
+    remove, move_to, clear, shuffle, unshuffle, set_repeat, next, previous, jump_to
+);
+// `play_next` on a shuffled queue runs out of memory with Kani's default solver, CaDiCaL, from 3 entries with one
+// added (measured on 2026-11-06, Kani 0.68.0, a 4-core 16 GB Linux container, one run); MiniSat proves it in 35 s.
+proofs_for_each_length_and_added!(replace, play_next_in_order, play_next_shuffled with minisat, append);
+
+/// One proof per operation that adds entries, number added, free ids left (one short and refused, or just enough and
+/// accepted) and starting length.
+macro_rules! ids_run_out_proofs {
+    ($($module:ident: $add:expr),* $(,)?) => {
+        $(
+            mod $module {
+                use super::*;
+
+                ids_run_out_proofs!(@case $add, adding_1_with_0_left, 1, 0);
+                ids_run_out_proofs!(@case $add, adding_1_with_1_left, 1, 1);
+                ids_run_out_proofs!(@case $add, adding_2_with_0_left, 2, 0);
+                ids_run_out_proofs!(@case $add, adding_2_with_1_left, 2, 1);
+                ids_run_out_proofs!(@case $add, adding_2_with_2_left, 2, 2);
+            }
+        )*
+    };
+    (@case $add:expr, $name:ident, $added:literal, $left:literal) => {
+        mod $name {
+            use super::*;
+
+            #[kani::proof]
+            #[kani::unwind(6)]
+            fn from_0_entries() {
+                ids_run_out::<$added, $left>(0, $add);
+            }
+
+            #[kani::proof]
+            #[kani::unwind(6)]
+            fn from_1_entry() {
+                ids_run_out::<$added, $left>(1, $add);
+            }
+
+            #[kani::proof]
+            #[kani::unwind(6)]
+            fn from_2_entries() {
+                ids_run_out::<$added, $left>(2, $add);
+            }
+
+            #[kani::proof]
+            #[kani::unwind(6)]
+            fn from_3_entries() {
+                ids_run_out::<$added, $left>(3, $add);
+            }
+        }
+    };
+}
+
+ids_run_out_proofs!(
+    replace_when_ids_run_out: |queue: &mut Queue<u8>, media| queue.replace(QueueSource::Selection, media, None),
+    play_next_when_ids_run_out: |queue: &mut Queue<u8>, media| queue.play_next(media),
+    append_when_ids_run_out: |queue: &mut Queue<u8>, media| queue.append(media, Origin::Manual),
+);

@@ -141,6 +141,21 @@ fn ids_running_out_is_an_error_that_changes_nothing() {
     assert_eq!(queue, before);
 }
 
+#[test]
+fn ids_up_to_the_last_free_one_are_given_out() {
+    // `u64::MAX` itself is never given out: the next id must stay above every id.
+    let mut queue = queue_of(&[1], Some(0));
+    queue.next_id = u64::MAX - 2;
+    queue.append([2, 3], Origin::Manual).unwrap();
+    let ids: Vec<u64> = queue.entries().iter().map(|e| e.id().0).collect();
+    assert_eq!(ids[1..], [u64::MAX - 2, u64::MAX - 1]);
+    assert_eq!(queue.next_id, u64::MAX);
+    assert_eq!(
+        queue.append([4], Origin::Manual),
+        Err(QueueError::IdsExhausted)
+    );
+}
+
 // Play next and append.
 
 #[test]

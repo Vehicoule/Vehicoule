@@ -2,8 +2,8 @@
 //! <https://github.com/Vehicoule/Vehicoule/blob/main/docs/core-playback-spec.md>).
 //!
 //! A queue holds entries in the order of its source, an optional current entry, a repeat mode and a shuffle state. It
-//! is generic over the media id `M`, so music, video and books share it. It does no I/O and never draws randomness:
-//! the shuffle seed comes in with the call.
+//! is generic over the media id `M`, so the music and video sessions share it (books are read, not played, and have no
+//! queue). It does no I/O and never draws randomness: the shuffle seed comes in with the call.
 
 mod rng;
 
@@ -227,7 +227,7 @@ impl<M> Queue<M> {
     pub fn replace(
         &mut self,
         source: QueueSource<M>,
-        media: impl IntoIterator<Item = M>,
+        media: impl IntoIterator<Item = M, IntoIter: ExactSizeIterator>,
         start: Option<usize>,
     ) -> Result<(), QueueError> {
         let mut next_id = self.next_id;
@@ -241,15 +241,15 @@ impl<M> Queue<M> {
                 },
             )?),
         };
+        if let Shuffle::On { rng, .. } = &self.shuffle {
+            let mut rng = rng.clone();
+            let order = shuffled_order(&entries, start, &mut rng);
+            self.shuffle = Shuffle::On { order, rng };
+        }
         self.next_id = next_id;
         self.entries = entries;
         self.source = source;
         self.current = current;
-        if let Shuffle::On { rng, .. } = &self.shuffle {
-            let mut rng = rng.clone();
-            let order = shuffled_order(&self.entries, self.current, &mut rng);
-            self.shuffle = Shuffle::On { order, rng };
-        }
         Ok(())
     }
 
@@ -259,17 +259,25 @@ impl<M> Queue<M> {
     /// # Errors
     ///
     /// [`QueueError::IdsExhausted`] when the ids run out; the queue is unchanged.
-    pub fn play_next(&mut self, media: impl IntoIterator<Item = M>) -> Result<(), QueueError> {
+    pub fn play_next(
+        &mut self,
+        media: impl IntoIterator<Item = M, IntoIter: ExactSizeIterator>,
+    ) -> Result<(), QueueError> {
         let mut next_id = self.next_id;
         let added = make_entries(&mut next_id, media, Origin::Manual)?;
         self.next_id = next_id;
-        let ids: Vec<EntryId> = added.iter().map(|e| e.id).collect();
+        let count = added.len();
+        // Inserted one by one rather than spliced: `splice` is far heavier for Kani to model, and the queue only ever
+        // inserts a handful of entries at a time.
         let at = self.position_after_current_in_entries();
-        self.entries.splice(at..at, added);
-        let current = self.current;
+        for (offset, entry) in added.into_iter().enumerate() {
+            self.entries.insert(at.saturating_add(offset), entry);
+        }
         if let Shuffle::On { order, .. } = &mut self.shuffle {
-            let at = position_after(order, current);
-            order.splice(at..at, ids);
+            let at_order = position_after(order, self.current);
+            for (offset, entry) in self.entries.iter().skip(at).take(count).enumerate() {
+                order.insert(at_order.saturating_add(offset), entry.id);
+            }
         }
         Ok(())
     }
@@ -281,7 +289,7 @@ impl<M> Queue<M> {
     /// [`QueueError::IdsExhausted`] when the ids run out; the queue is unchanged.
     pub fn append(
         &mut self,
-        media: impl IntoIterator<Item = M>,
+        media: impl IntoIterator<Item = M, IntoIter: ExactSizeIterator>,
         origin: Origin,
     ) -> Result<(), QueueError> {
         let mut next_id = self.next_id;
@@ -308,8 +316,10 @@ impl<M> Queue<M> {
                 .filter(|next| *next != id);
         }
         self.entries.remove(index);
-        if let Shuffle::On { order, .. } = &mut self.shuffle {
-            order.retain(|other| *other != id);
+        if let Shuffle::On { order, .. } = &mut self.shuffle
+            && let Some(position) = order.iter().position(|other| *other == id)
+        {
+            order.remove(position);
         }
         Ok(())
     }
@@ -333,16 +343,14 @@ impl<M> Queue<M> {
                     .iter()
                     .position(|e| e.id == id)
                     .ok_or(QueueError::UnknownEntry(id))?;
-                let entry = self.entries.remove(from);
-                self.entries.insert(position, entry);
+                move_item(&mut self.entries, from, position);
             }
             Shuffle::On { order, .. } => {
                 let from = order
                     .iter()
                     .position(|other| *other == id)
                     .ok_or(QueueError::UnknownEntry(id))?;
-                let moved = order.remove(from);
-                order.insert(position, moved);
+                move_item(order, from, position);
             }
         }
         Ok(())
@@ -367,7 +375,8 @@ impl<M> Queue<M> {
     /// seed always give the same order. Shuffling a shuffled queue reshuffles it.
     pub fn shuffle(&mut self, seed: u64) {
         let mut rng = SplitMix64::new(seed);
-        let order = shuffled_order(&self.entries, self.current, &mut rng);
+        let front = self.current.and_then(|current| self.index_of(current));
+        let order = shuffled_order(&self.entries, front, &mut rng);
         self.shuffle = Shuffle::On { order, rng };
     }
 
@@ -384,7 +393,7 @@ impl<M> Queue<M> {
     /// with repeat off, as Media3 does (`BasePlayer.getRepeatModeForNavigation`).
     pub fn next(&mut self, advance: Advance) -> Option<EntryId> {
         let next = match self.current {
-            None => self.play_ids().first().copied(),
+            None => self.play_id_at(0),
             Some(current) => match (self.repeat, advance) {
                 (Repeat::One, Advance::Finished) => Some(current),
                 (Repeat::All, _) => self.step_forward(current, true),
@@ -402,10 +411,9 @@ impl<M> Queue<M> {
     /// [`Repeat::All`], the previous of the first entry is the last.
     pub fn previous(&mut self) -> Option<EntryId> {
         let current = self.current?;
-        let ids = self.play_ids();
-        let position = ids.iter().position(|id| *id == current)?;
-        let previous = position_back(ids.len(), position, self.repeat == Repeat::All)
-            .and_then(|before| ids.get(before).copied())
+        let position = self.play_position(current)?;
+        let previous = position_back(self.play_len(), position, self.repeat == Repeat::All)
+            .and_then(|before| self.play_id_at(before))
             .filter(|before| *before != current);
         if previous.is_some() {
             self.current = previous;
@@ -428,21 +436,25 @@ impl<M> Queue<M> {
     /// and the play order holds every entry exactly once.
     #[cfg(any(test, kani))]
     pub(crate) fn invariants_hold(&self) -> bool {
-        let ids: Vec<EntryId> = self.entries.iter().map(|e| e.id).collect();
-        let unique = ids.iter().enumerate().all(|(i, id)| {
-            !ids.iter()
+        // No allocation here: under Kani every heap object multiplies the cost of each pointer dereference.
+        let entries = &self.entries;
+        let unique = entries.iter().enumerate().all(|(i, entry)| {
+            !entries
+                .iter()
                 .skip(i.saturating_add(1))
-                .any(|other| other == id)
+                .any(|other| other.id == entry.id)
         });
-        let given_out = ids.iter().all(|id| id.0 < self.next_id);
-        let current_is_entry = self.current.is_none_or(|current| ids.contains(&current));
+        let given_out = entries.iter().all(|entry| entry.id.0 < self.next_id);
+        let current_is_entry = self
+            .current
+            .is_none_or(|current| entries.iter().any(|entry| entry.id == current));
         let order_is_permutation = match &self.shuffle {
             Shuffle::Off => true,
             Shuffle::On { order, .. } => {
-                order.len() == ids.len()
-                    && ids
+                order.len() == entries.len()
+                    && entries
                         .iter()
-                        .all(|id| order.iter().filter(|other| *other == id).count() == 1)
+                        .all(|entry| order.iter().filter(|other| **other == entry.id).count() == 1)
             }
         };
         unique && given_out && current_is_entry && order_is_permutation
@@ -452,67 +464,117 @@ impl<M> Queue<M> {
         self.entries.iter().position(|e| e.id == id)
     }
 
-    fn play_ids(&self) -> Vec<EntryId> {
+    // The play order is read in place, never copied: navigation allocates nothing.
+
+    fn play_len(&self) -> usize {
         match &self.shuffle {
-            Shuffle::Off => self.entries.iter().map(|e| e.id).collect(),
-            Shuffle::On { order, .. } => order.clone(),
+            Shuffle::Off => self.entries.len(),
+            Shuffle::On { order, .. } => order.len(),
+        }
+    }
+
+    fn play_id_at(&self, position: usize) -> Option<EntryId> {
+        match &self.shuffle {
+            Shuffle::Off => self.entries.get(position).map(|e| e.id),
+            Shuffle::On { order, .. } => order.get(position).copied(),
+        }
+    }
+
+    fn play_position(&self, id: EntryId) -> Option<usize> {
+        match &self.shuffle {
+            Shuffle::Off => self.index_of(id),
+            Shuffle::On { order, .. } => order.iter().position(|other| *other == id),
         }
     }
 
     /// The entry after `from` in the play order; after the last, the first when `wrap` is set.
     fn step_forward(&self, from: EntryId, wrap: bool) -> Option<EntryId> {
-        let ids = self.play_ids();
-        let position = ids.iter().position(|id| *id == from)?;
-        ids.get(position_forward(ids.len(), position, wrap)?)
-            .copied()
+        let position = self.play_position(from)?;
+        self.play_id_at(position_forward(self.play_len(), position, wrap)?)
     }
 
     fn position_after_current_in_entries(&self) -> usize {
-        let ids: Vec<EntryId> = self.entries.iter().map(|e| e.id).collect();
-        position_after(&ids, self.current)
+        index_after(self.current.and_then(|current| self.index_of(current)))
+    }
+}
+
+/// Moves the item at `from` to `to`, shifting the items between them by one place, by swapping neighbours. Removing
+/// then inserting, or `rotate`, cost Kani far more to model, and a move spans a few places at most in practice.
+fn move_item<T>(items: &mut [T], from: usize, to: usize) {
+    // At most one of the two spans exists: `get_mut` has no span for a range that ends before it starts.
+    if let Some(span) = items.get_mut(from..=to) {
+        for left in 0..span.len().saturating_sub(1) {
+            span.swap(left, left.saturating_add(1));
+        }
+    }
+    if let Some(span) = items.get_mut(to..=from) {
+        for left in (0..span.len().saturating_sub(1)).rev() {
+            span.swap(left, left.saturating_add(1));
+        }
     }
 }
 
 /// The index right after `current` in `ids`, or 0 when there is no current entry.
 fn position_after(ids: &[EntryId], current: Option<EntryId>) -> usize {
-    current
-        .and_then(|current| ids.iter().position(|id| *id == current))
+    index_after(current.and_then(|current| ids.iter().position(|id| *id == current)))
+}
+
+/// The index right after `found`, or 0 when nothing was found.
+fn index_after(found: Option<usize>) -> usize {
+    found
         .and_then(|position| position.checked_add(1))
         .unwrap_or(0)
 }
 
+/// New entries for `media`, with the ids from `next_id` on, and `next_id` moved past them. The ids are checked before
+/// any entry is made, so a refusal makes nothing.
 fn make_entries<M>(
     next_id: &mut u64,
-    media: impl IntoIterator<Item = M>,
+    media: impl IntoIterator<Item = M, IntoIter: ExactSizeIterator>,
     origin: Origin,
 ) -> Result<Vec<Entry<M>>, QueueError> {
-    media
-        .into_iter()
-        .map(|media| {
-            let id = EntryId(*next_id);
-            *next_id = next_id.checked_add(1).ok_or(QueueError::IdsExhausted)?;
-            Ok(Entry { id, media, origin })
-        })
-        .collect()
+    let media = media.into_iter();
+    let count = u64::try_from(media.len()).map_err(|_| QueueError::IdsExhausted)?;
+    // The next id stays above every id given out, so the ids end one before `end`, which must fit. Compared rather
+    // than `checked_add`ed: Kani folds a comparison of known values, so a refusal stops its analysis right here.
+    let free = u64::MAX.wrapping_sub(*next_id);
+    if count > free {
+        return Err(QueueError::IdsExhausted);
+    }
+    let end = next_id.wrapping_add(count);
+    let mut entries = Vec::with_capacity(media.len());
+    // Zipped with the ids, so an iterator that yields more than its `len` cannot give out an id twice.
+    for (id, media) in (*next_id..end).zip(media) {
+        entries.push(Entry {
+            id: EntryId(id),
+            media,
+            origin,
+        });
+    }
+    *next_id = end;
+    Ok(entries)
 }
 
-/// `current` first, then every other entry in a Fisher-Yates order drawn from `rng`.
+/// The entry at `front` first, then every other entry in a Fisher-Yates order drawn from `rng`.
 fn shuffled_order<M>(
     entries: &[Entry<M>],
-    current: Option<EntryId>,
+    front: Option<usize>,
     rng: &mut SplitMix64,
 ) -> Vec<EntryId> {
-    let mut rest: Vec<EntryId> = entries
-        .iter()
-        .map(|e| e.id)
-        .filter(|id| Some(*id) != current)
-        .collect();
-    fisher_yates(&mut rest, rng);
-    current
-        .filter(|id| entries.iter().any(|e| e.id == *id))
-        .into_iter()
-        .chain(rest)
-        .collect()
+    // Every id is written at a known place, then the current one is moved to the front: pushing all but the current
+    // one writes at places that depend on it, which Kani cannot afford to track. Each branch calls `fisher_yates` on
+    // a slice of known bounds for the same reason.
+    let mut order = Vec::with_capacity(entries.len());
+    order.extend(entries.iter().map(|e| e.id));
+    if let Some(at) = front {
+        move_item(&mut order, at, 0);
+        if let Some(rest) = order.get_mut(1..) {
+            fisher_yates(rest, rng);
+        }
+    } else {
+        fisher_yates(&mut order, rng);
+    }
+    order
 }
 
 /// The position after `position` in a play order of `len` entries; after the last, the first when `wrap` is set.
