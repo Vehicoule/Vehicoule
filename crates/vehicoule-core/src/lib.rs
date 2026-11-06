@@ -5,4 +5,7 @@
 //! disk and the platform players live at the edges and talk to it through those events and commands
 //! ([ADR 0003](https://github.com/Vehicoule/Vehicoule/blob/main/docs/adr/0003-core-architecture.md)).
 //!
-//! This crate is empty until the core's specification is accepted.
+//! What it must do is written in the core spec (`docs/core-playback-spec.md`); every invariant marked \[Kani\] there is
+//! a proof harness here.
+
+pub mod queue;
