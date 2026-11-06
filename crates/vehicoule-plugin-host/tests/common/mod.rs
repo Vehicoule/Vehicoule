@@ -22,15 +22,15 @@ pub(crate) fn fixture(name: &str) -> Result<Vec<u8>, String> {
     std::fs::read(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))
 }
 
-pub(crate) fn host_with(max_plugin_size: u64) -> Result<PluginHost, HostError> {
+pub(crate) fn host_with(max_plugin_size: u64, max_output: u64) -> Result<PluginHost, HostError> {
     PluginHost::new(HostConfig::new(
         ByteSize::new(max_plugin_size),
         Fuel::new(FUEL),
         ByteSize::new(MAX_MEMORY),
-        ByteSize::new(MAX_OUTPUT),
+        ByteSize::new(max_output),
     ))
 }
 
 pub(crate) fn host() -> Result<PluginHost, HostError> {
-    host_with(MAX_PLUGIN_SIZE)
+    host_with(MAX_PLUGIN_SIZE, MAX_OUTPUT)
 }

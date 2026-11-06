@@ -11,7 +11,7 @@ use thiserror::Error;
 
 use crate::bindings::base::vehicoule::plugin::types;
 use crate::bindings::search::SearchPluginPre;
-use crate::media::TextSize;
+use crate::media::{TextSize, text_bytes};
 use crate::{ByteSize, Capability, InstalledPlugin, ItemKind, Page, PluginHost};
 
 /// An error the plugin itself returned, as the contract names them.
@@ -119,10 +119,9 @@ impl PluginHost {
     fn bounded<T: TextSize>(&self, answer: Result<T, types::Error>) -> Result<T, PluginFailure> {
         let answer = answer.map_err(PluginError::from);
         let size = match &answer {
-            Ok(value) => value.text_size(),
-            Err(error) => error.text_size(),
+            Ok(value) => text_bytes(value),
+            Err(error) => text_bytes(error),
         };
-        let size = ByteSize::new(u64::try_from(size).unwrap_or(u64::MAX));
         let limit = self.config().max_output;
         if size > limit {
             return Err(PluginFailure::OutputTooLarge { size, limit });

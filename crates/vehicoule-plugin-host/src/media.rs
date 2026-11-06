@@ -5,6 +5,7 @@
 
 use std::time::Duration;
 
+use crate::ByteSize;
 use crate::bindings::base::vehicoule::plugin::types;
 use crate::bindings::search::exports::vehicoule::plugin::search;
 
@@ -165,6 +166,11 @@ impl<T: TextSize> TextSize for Vec<T> {
         self.iter()
             .fold(0, |sum, value| sum.saturating_add(value.text_size()))
     }
+}
+
+/// The text a value holds, as a [`ByteSize`] to compare with the output budget.
+pub(crate) fn text_bytes<T: TextSize>(value: &T) -> ByteSize {
+    ByteSize::new(u64::try_from(value.text_size()).unwrap_or(u64::MAX))
 }
 
 /// The sum of the text sizes of the given parts, saturated.

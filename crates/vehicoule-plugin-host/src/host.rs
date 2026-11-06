@@ -7,6 +7,7 @@ use wasmtime::{Engine, ResourceLimiter, Store, Trap};
 
 use crate::bindings::base::vehicoule::plugin::{http, log, types};
 use crate::bindings::{artwork, base, link_import, lyrics, metadata, radio, resolve, search};
+use crate::media::{TextSize, text_bytes};
 use crate::{ByteSize, Capability, Domain, HostConfig, Manifest, ManifestError, PluginFailure};
 
 /// The only imports a plugin may have (section 5).
@@ -55,6 +56,14 @@ pub enum InstallError {
     /// The plugin trapped (crashed).
     #[error("the plugin trapped: {0}")]
     Trap(String),
+    /// The manifest holds more text than the output budget, which bounds `describe` as any call.
+    #[error("the manifest holds {} bytes of text, over the ceiling of {} bytes", size.get(), limit.get())]
+    OutputTooLarge {
+        /// The text the manifest held.
+        size: ByteSize,
+        /// The ceiling.
+        limit: ByteSize,
+    },
     /// The manifest breaks a rule of section 4.
     #[error("invalid manifest: {0}")]
     InvalidManifest(#[from] ManifestError),
@@ -242,6 +251,13 @@ impl PluginHost {
             .instantiate_pre(&component)
             .map_err(|e| InstallError::Link(e.to_string()))?;
         let raw = self.describe(&pre)?;
+        let size = text_bytes(&raw);
+        if size > self.config.max_output {
+            return Err(InstallError::OutputTooLarge {
+                size,
+                limit: self.config.max_output,
+            });
+        }
         let manifest = Manifest::new(
             &raw.id,
             &raw.name,
@@ -307,6 +323,19 @@ impl PluginHost {
             .and_then(|pre| pre.instantiate(&mut store))
             .and_then(|plugin| plugin.vehicoule_plugin_plugin().call_describe(&mut store))
             .map_err(|e| stop(&e, &store).into())
+    }
+}
+
+impl TextSize for base::exports::vehicoule::plugin::plugin::Manifest {
+    fn text_size(&self) -> usize {
+        [
+            self.id.text_size(),
+            self.name.text_size(),
+            self.version.text_size(),
+            self.http_hosts.text_size(),
+        ]
+        .iter()
+        .fold(0, |total, part| total.saturating_add(*part))
     }
 }
 

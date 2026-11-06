@@ -73,6 +73,12 @@ fn behavior() -> Manifest {
     manifest("missing", vec![Capability::Resolve], hosts())
 }
 
+#[cfg(feature = "huge-manifest")]
+fn behavior() -> Manifest {
+    // 70,000 bytes of name: valid by the manifest rules, over the tests' 64 KiB output ceiling.
+    manifest(&"n".repeat(70_000), Vec::new(), hosts())
+}
+
 #[cfg(feature = "bad-host-pattern")]
 fn behavior() -> Manifest {
     let mut patterns = hosts();
