@@ -5,7 +5,9 @@
 
 mod common;
 
-use common::{MAX_OUTPUT, MAX_PLUGIN_SIZE, fixture, host, host_on, host_with, ok_network};
+use common::{
+    MAX_OUTPUT, MAX_PLUGIN_SIZE, fixture, host, host_on, host_ticking, host_with, ok_network,
+};
 use vehicoule_plugin_host::{ByteSize, Capability, Domain, InstallError, ManifestError};
 
 #[test]
@@ -74,6 +76,22 @@ fn an_endless_describe_is_stopped_by_fuel() {
         .install(&fixture("endless-loop").unwrap())
         .unwrap_err();
     assert!(matches!(error, InstallError::FuelExhausted), "{error:?}");
+}
+
+#[test]
+fn a_describe_with_no_wall_time_is_stopped_and_one_tick_is_enough_when_none_passes() {
+    // A deadline of zero ticks has already passed when `describe` starts.
+    let error = host_ticking(&ok_network(), 0, 0)
+        .unwrap()
+        .install(&fixture("good").unwrap())
+        .unwrap_err();
+    assert!(matches!(error, InstallError::WallTime), "{error:?}");
+    assert!(
+        host_ticking(&ok_network(), 1, 0)
+            .unwrap()
+            .install(&fixture("good").unwrap())
+            .is_ok()
+    );
 }
 
 #[test]

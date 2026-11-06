@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use common::{
     FakeNetwork, MAX_OUTPUT, MAX_REQUESTS, MAX_RESPONSE_BODY, REQUEST_DEADLINE, fixture, host,
-    host_on,
+    host_on, host_ticking,
 };
 use vehicoule_plugin_host::{
     ByteSize, Capability, HttpResponse, InstalledPlugin, Item, ItemKind, Method, NetworkError,
@@ -506,4 +506,59 @@ fn a_transport_failure_goes_back_to_the_plugin() {
         "transport:no route;transport:no route"
     );
     assert_eq!(network.requests().len(), 2);
+}
+
+/// A host whose calls last `wall_time` ticks, with the `good` plugin installed, on a network that answers `200 ok`
+/// and lets `ticks_per_request` ticks pass during each request.
+fn good_ticking(
+    wall_time: u64,
+    ticks_per_request: u64,
+) -> Result<(PluginHost, InstalledPlugin, std::sync::Arc<FakeNetwork>), String> {
+    let network = common::ok_network();
+    let host = host_ticking(&network, wall_time, ticks_per_request).map_err(|e| e.to_string())?;
+    let plugin = host.install(&fixture("good")?).map_err(|e| e.to_string())?;
+    Ok((host, plugin, network))
+}
+
+#[test]
+fn a_call_that_reaches_its_wall_time_is_stopped() {
+    let (host, plugin, network) = good_ticking(3, 3).unwrap();
+    assert_eq!(
+        answer(&host, &plugin, "fetch:2:https://api.example.org/").unwrap_err(),
+        PluginFailure::WallTime
+    );
+    // Stopped when the plugin got control back after the first request, before it could send the second.
+    assert_eq!(network.requests().len(), 1);
+}
+
+#[test]
+fn a_call_one_tick_short_of_its_wall_time_returns() {
+    let (host, plugin, network) = good_ticking(3, 2).unwrap();
+    assert_eq!(
+        answer(&host, &plugin, "fetch:1:https://api.example.org/").unwrap(),
+        "200:ok"
+    );
+    // Each call counts its own ticks: the two ticks of the first call are not charged to the second.
+    assert_eq!(
+        answer(&host, &plugin, "fetch:1:https://api.example.org/").unwrap(),
+        "200:ok"
+    );
+    assert_eq!(network.requests().len(), 2);
+}
+
+#[test]
+fn a_call_after_a_wall_time_stop_gets_its_whole_wall_time() {
+    let (host, plugin, _network) = good_ticking(3, 3).unwrap();
+    assert_eq!(
+        answer(&host, &plugin, "fetch:1:https://api.example.org/").unwrap_err(),
+        PluginFailure::WallTime
+    );
+    let page = host
+        .search(&plugin, "after", &[ItemKind::Track], None)
+        .unwrap();
+    assert!(
+        matches!(&page.items[..], [Item::Track(t)] if t.title == "after"),
+        "{:?}",
+        page.items
+    );
 }
