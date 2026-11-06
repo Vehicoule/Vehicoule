@@ -142,8 +142,8 @@ Errors are not a resting state: a failure moves the session on (section 5) and i
 - Every wait on an edge has a deadline: `Resolving`, `Loading` and `Buffering` arm a timer when entered. When it fires
   before the awaited report, the entry fails as above. `WaitingForNetwork` is not a wait on an edge but on the user's
   connectivity, and has no deadline: it ends when the network comes back or when the user acts (stop, another
-  entry). The three deadlines are given to the core in its configuration, never
-  written in it; tests use arbitrary values. Their real values are set from measurements (section 7).
+  entry). The three deadlines are given to the core in its configuration, never written in it; tests use arbitrary
+  values. Their real values are set from measurements (section 7).
 - **[Kani]** A timer that fires after the state it guarded has been left does nothing.
 - Retries, timeouts and fallbacks are never stacked: there is exactly one rule per failure, above.
 
