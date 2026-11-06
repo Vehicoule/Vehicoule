@@ -3,6 +3,8 @@
 //! No value is written here: the edge gives every budget, tests use arbitrary ones, and the real values are set from
 //! measurements in an ADR.
 
+use std::time::Duration;
+
 /// A size in bytes.
 ///
 /// ```
@@ -57,16 +59,54 @@ impl Fuel {
     }
 }
 
+/// The HTTP budget of one call.
+///
+/// ```
+/// use std::time::Duration;
+/// use vehicoule_plugin_host::{ByteSize, HttpBudget};
+///
+/// let http = HttpBudget::new(10, ByteSize::new(2 << 20), Duration::from_secs(10));
+/// assert_eq!(http.max_requests, 10);
+/// ```
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HttpBudget {
+    /// The most requests a call may send to the network; refused requests do not count, as they never reach it.
+    pub max_requests: u32,
+    /// The largest response body a request may receive.
+    pub max_response_body: ByteSize,
+    /// How long one request may take.
+    pub request_deadline: Duration,
+}
+
+impl HttpBudget {
+    /// An HTTP budget from the edge's configuration.
+    #[must_use]
+    pub const fn new(
+        max_requests: u32,
+        max_response_body: ByteSize,
+        request_deadline: Duration,
+    ) -> Self {
+        Self {
+            max_requests,
+            max_response_body,
+            request_deadline,
+        }
+    }
+}
+
 /// The budgets the host enforces.
 ///
 /// ```
-/// use vehicoule_plugin_host::{ByteSize, Fuel, HostConfig};
+/// use std::time::Duration;
+/// use vehicoule_plugin_host::{ByteSize, Fuel, HostConfig, HttpBudget};
 ///
 /// let config = HostConfig::new(
 ///     ByteSize::new(8 << 20),
 ///     Fuel::new(50_000_000),
 ///     ByteSize::new(64 << 20),
 ///     ByteSize::new(1 << 20),
+///     HttpBudget::new(10, ByteSize::new(2 << 20), Duration::from_secs(10)),
 /// );
 /// assert_eq!(config.max_plugin_size, ByteSize::new(8 << 20));
 /// assert_eq!(config.max_output, ByteSize::new(1 << 20));
@@ -83,6 +123,8 @@ pub struct HostConfig {
     /// The ceiling on the size of what a call returns: the bytes of every string in the value, plus one for every
     /// element of every list.
     pub max_output: ByteSize,
+    /// The HTTP budget of each call.
+    pub http: HttpBudget,
 }
 
 impl HostConfig {
@@ -93,12 +135,14 @@ impl HostConfig {
         fuel_per_call: Fuel,
         max_memory: ByteSize,
         max_output: ByteSize,
+        http: HttpBudget,
     ) -> Self {
         Self {
             max_plugin_size,
             fuel_per_call,
             max_memory,
             max_output,
+            http,
         }
     }
 }

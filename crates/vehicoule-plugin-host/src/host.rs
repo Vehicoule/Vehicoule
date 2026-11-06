@@ -1,5 +1,8 @@
 //! Installing a plugin: size, compilation, imports, `describe`, manifest, exports (docs/plugin-host-spec.md,
-//! sections 3 to 5); and the store every call into a plugin gets, with its budgets (section 6).
+//! sections 3 to 5); and the store every call into a plugin gets, with its budgets and its network (sections 5 and
+//! 6).
+
+use std::sync::Arc;
 
 use thiserror::Error;
 use wasmtime::component::{Component, HasSelf, InstancePre, Linker};
@@ -8,7 +11,11 @@ use wasmtime::{Engine, ResourceLimiter, Store, Trap};
 use crate::bindings::base::vehicoule::plugin::{http, log, types};
 use crate::bindings::{artwork, base, link_import, lyrics, metadata, radio, resolve, search};
 use crate::media::{OutputSize, output_bytes};
-use crate::{ByteSize, Capability, Domain, HostConfig, Manifest, ManifestError, PluginFailure};
+use crate::network::{HeaderRefusal, HttpsUrl, RequestLimits, UrlRefusal, header_refusal};
+use crate::{
+    ByteSize, Capability, Domain, HostConfig, HostPattern, HttpBudget, HttpRequest, Manifest,
+    ManifestError, Method, Network, NetworkError, PluginFailure,
+};
 
 /// The only imports a plugin may have (section 5).
 const ALLOWED_IMPORTS: [&str; 3] = [
@@ -106,20 +113,117 @@ impl InstalledPlugin {
 /// The state of one store: one call, then dropped (section 3).
 pub(crate) struct CallState {
     limiter: MemoryLimiter,
+    http: Http,
+    /// Set when an HTTP budget ended the call, so the failure names it rather than the trap that stopped the plugin.
+    http_stop: Option<HttpStop>,
+}
+
+/// What a call may do on the network.
+enum Http {
+    /// During install every request is refused (section 3): the plugin has no grant yet.
+    Refused,
+    /// A capability call: the manifest's hosts, within the call's budget.
+    Granted {
+        hosts: Vec<HostPattern>,
+        network: Arc<dyn Network>,
+        budget: HttpBudget,
+        sent: u32,
+    },
+}
+
+/// An HTTP budget that ended a call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HttpStop {
+    TooManyRequests,
+    ResponseTooLarge,
+    RequestTimeout,
+}
+
+impl CallState {
+    /// Ends the call because of `stop`.
+    fn stop(&mut self, stop: HttpStop) -> wasmtime::Error {
+        self.http_stop = Some(stop);
+        wasmtime::format_err!("an HTTP budget ended the call: {stop:?}")
+    }
 }
 
 impl types::Host for CallState {}
 
 impl http::Host for CallState {
-    /// During install every request is refused (section 3): the plugin has no grant yet.
-    fn fetch(&mut self, _request: http::Request) -> Result<http::Response, http::HttpError> {
-        Err(http::HttpError::RefusedHost)
+    /// Checks the request (section 5) and, if it passes, counts it and hands it to the network. A refused request
+    /// returns an error to the plugin and never reaches the network; an exceeded budget ends the call (section 6).
+    fn fetch(
+        &mut self,
+        request: http::Request,
+    ) -> wasmtime::Result<Result<http::Response, http::HttpError>> {
+        let Http::Granted {
+            hosts,
+            network,
+            budget,
+            sent,
+        } = &mut self.http
+        else {
+            return Ok(Err(http::HttpError::RefusedHost));
+        };
+        let url = match HttpsUrl::parse(&request.url) {
+            Ok(url) => url,
+            Err(UrlRefusal::Scheme) => return Ok(Err(http::HttpError::RefusedScheme)),
+            Err(UrlRefusal::Host) => return Ok(Err(http::HttpError::RefusedHost)),
+        };
+        if !hosts.iter().any(|pattern| pattern.matches(url.host())) {
+            return Ok(Err(http::HttpError::RefusedHost));
+        }
+        for (name, value) in &request.headers {
+            match header_refusal(name, value) {
+                Some(HeaderRefusal::Host) => return Ok(Err(http::HttpError::RefusedHost)),
+                Some(HeaderRefusal::Malformed) => {
+                    return Ok(Err(http::HttpError::Transport(format!(
+                        "header `{}` cannot be sent",
+                        name.escape_debug()
+                    ))));
+                }
+                None => {}
+            }
+        }
+        if *sent >= budget.max_requests {
+            return Err(self.stop(HttpStop::TooManyRequests));
+        }
+        *sent = sent.saturating_add(1);
+        let limits = RequestLimits::new(budget.max_response_body, budget.request_deadline);
+        let checked = HttpRequest {
+            method: match request.method {
+                http::Method::Get => Method::Get,
+                http::Method::Head => Method::Head,
+                http::Method::Post => Method::Post,
+            },
+            url,
+            headers: request.headers,
+            body: request.body,
+        };
+        match network.fetch(&checked, limits) {
+            Ok(response)
+                if ByteSize::new(u64::try_from(response.body.len()).unwrap_or(u64::MAX))
+                    > limits.max_body =>
+            {
+                Err(self.stop(HttpStop::ResponseTooLarge))
+            }
+            Ok(response) => Ok(Ok(http::Response {
+                status: response.status,
+                headers: response.headers,
+                body: response.body,
+            })),
+            Err(NetworkError::BodyTooLarge) => Err(self.stop(HttpStop::ResponseTooLarge)),
+            Err(NetworkError::Timeout) => Err(self.stop(HttpStop::RequestTimeout)),
+            Err(NetworkError::Transport(message)) => Ok(Err(http::HttpError::Transport(message))),
+        }
     }
 }
 
 impl log::Host for CallState {
-    /// Install-time logs have no sink yet; they are dropped, never shown.
-    fn log(&mut self, _level: log::Level, _message: String) {}
+    /// Logs have no sink yet; they are dropped, never shown.
+    fn log(&mut self, _level: log::Level, _message: String) -> wasmtime::Result<()> {
+        Ok(())
+    }
 }
 
 /// Bounds the bytes held by all of a call's linear memories and tables together, and remembers that a growth was
@@ -190,27 +294,42 @@ pub struct PluginHost {
     engine: Engine,
     linker: Linker<CallState>,
     config: HostConfig,
+    network: Arc<dyn Network>,
 }
 
 impl PluginHost {
-    /// A host enforcing `config`.
+    /// A host enforcing `config`, whose plugins' checked requests go to `network`.
     ///
     /// # Errors
     ///
     /// [`HostError::Engine`] when Wasmtime refuses the configuration.
     ///
     /// ```
-    /// use vehicoule_plugin_host::{ByteSize, Fuel, HostConfig, PluginHost};
+    /// use std::sync::Arc;
+    /// use std::time::Duration;
+    /// use vehicoule_plugin_host::{
+    ///     ByteSize, Fuel, HostConfig, HttpBudget, HttpRequest, HttpResponse, Network, NetworkError, PluginHost,
+    ///     RequestLimits,
+    /// };
     ///
-    /// let host = PluginHost::new(HostConfig::new(
+    /// struct Offline;
+    ///
+    /// impl Network for Offline {
+    ///     fn fetch(&self, _request: &HttpRequest, _limits: RequestLimits) -> Result<HttpResponse, NetworkError> {
+    ///         Err(NetworkError::Transport("offline".to_owned()))
+    ///     }
+    /// }
+    ///
+    /// let config = HostConfig::new(
     ///     ByteSize::new(1 << 20),
     ///     Fuel::new(1_000_000),
     ///     ByteSize::new(16 << 20),
     ///     ByteSize::new(1 << 20),
-    /// ));
-    /// assert!(host.is_ok());
+    ///     HttpBudget::new(10, ByteSize::new(1 << 20), Duration::from_secs(10)),
+    /// );
+    /// assert!(PluginHost::new(config, Arc::new(Offline)).is_ok());
     /// ```
-    pub fn new(config: HostConfig) -> Result<Self, HostError> {
+    pub fn new(config: HostConfig, network: Arc<dyn Network>) -> Result<Self, HostError> {
         let mut wasm = wasmtime::Config::new();
         wasm.consume_fuel(true);
         let engine = Engine::new(&wasm).map_err(|e| HostError::Engine(e.to_string()))?;
@@ -221,6 +340,7 @@ impl PluginHost {
             engine,
             linker,
             config,
+            network,
         })
     }
 
@@ -294,16 +414,24 @@ impl PluginHost {
         if !plugin.manifest.capabilities().contains(&capability) {
             return Err(PluginFailure::NotProvided(capability));
         }
-        let mut store = self.store().map_err(|e| Stop::Runtime(e.to_string()))?;
+        let http = Http::Granted {
+            hosts: plugin.manifest.http_hosts().to_vec(),
+            network: Arc::clone(&self.network),
+            budget: self.config.http,
+            sent: 0,
+        };
+        let mut store = self.store(http).map_err(|e| Stop::Runtime(e.to_string()))?;
         call(&mut store, &plugin.pre).map_err(|e| stop(&e, &store).into())
     }
 
-    /// A store for one call: its own memory ceiling and its own fuel.
-    fn store(&self) -> wasmtime::Result<Store<CallState>> {
+    /// A store for one call: its own memory ceiling, its own fuel and its own network grant.
+    fn store(&self, http: Http) -> wasmtime::Result<Store<CallState>> {
         let mut store = Store::new(
             &self.engine,
             CallState {
                 limiter: MemoryLimiter::new(self.config.max_memory),
+                http,
+                http_stop: None,
             },
         );
         store.limiter(|state| &mut state.limiter);
@@ -317,7 +445,7 @@ impl PluginHost {
         pre: &InstancePre<CallState>,
     ) -> Result<base::exports::vehicoule::plugin::plugin::Manifest, InstallError> {
         let mut store = self
-            .store()
+            .store(Http::Refused)
             .map_err(|e| InstallError::Runtime(e.to_string()))?;
         base::BasePre::new(pre.clone())
             .and_then(|pre| pre.instantiate(&mut store))
@@ -346,6 +474,7 @@ impl OutputSize for base::exports::vehicoule::plugin::plugin::Manifest {
 pub(crate) enum Stop {
     FuelExhausted,
     MemoryLimit,
+    Http(HttpStop),
     Trap(String),
     Runtime(String),
 }
@@ -355,6 +484,10 @@ impl From<Stop> for InstallError {
         match stop {
             Stop::FuelExhausted => Self::FuelExhausted,
             Stop::MemoryLimit => Self::MemoryLimit,
+            // Install refuses every request before it is counted or sent, so no HTTP budget can end `describe`.
+            Stop::Http(stop) => {
+                Self::Runtime(format!("unexpected HTTP budget at install: {stop:?}"))
+            }
             Stop::Trap(trap) => Self::Trap(trap),
             Stop::Runtime(error) => Self::Runtime(error),
         }
@@ -366,14 +499,21 @@ impl From<Stop> for PluginFailure {
         match stop {
             Stop::FuelExhausted => Self::FuelExhausted,
             Stop::MemoryLimit => Self::MemoryLimit,
+            Stop::Http(HttpStop::TooManyRequests) => Self::TooManyRequests,
+            Stop::Http(HttpStop::ResponseTooLarge) => Self::ResponseTooLarge,
+            Stop::Http(HttpStop::RequestTimeout) => Self::RequestTimeout,
             Stop::Trap(trap) => Self::Trap(trap),
             Stop::Runtime(error) => Self::Runtime(error),
         }
     }
 }
 
-/// Names what stopped instantiation or a call, the memory limit first since a denied growth surfaces as a trap.
+/// Names what stopped instantiation or a call: a budget the host itself ended first (an HTTP budget, or a denied
+/// memory growth, which surfaces as a trap), then the trap.
 fn stop(error: &wasmtime::Error, store: &Store<CallState>) -> Stop {
+    if let Some(http) = store.data().http_stop {
+        return Stop::Http(http);
+    }
     if store.data().limiter.denied {
         return Stop::MemoryLimit;
     }

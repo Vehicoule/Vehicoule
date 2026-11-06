@@ -8,7 +8,12 @@
 //! Rust types stands for the contract's types whichever world a value comes from.
 
 pub(crate) mod base {
-    wasmtime::component::bindgen!({ path: "../../wit", world: "base" });
+    // Trappable: a host function can end the call, which is how an exceeded HTTP budget stops a plugin (section 6).
+    wasmtime::component::bindgen!({
+        path: "../../wit",
+        world: "base",
+        imports: { default: trappable },
+    });
 }
 
 pub(crate) mod search {

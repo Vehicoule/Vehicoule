@@ -5,7 +5,7 @@
 
 mod common;
 
-use common::{MAX_OUTPUT, MAX_PLUGIN_SIZE, fixture, host, host_with};
+use common::{MAX_OUTPUT, MAX_PLUGIN_SIZE, fixture, host, host_on, host_with, ok_network};
 use vehicoule_plugin_host::{ByteSize, Capability, Domain, InstallError, ManifestError};
 
 #[test]
@@ -218,4 +218,15 @@ fn a_manifest_exactly_at_the_output_ceiling_installs() {
         matches!(error, InstallError::OutputTooLarge { size, limit } if size == ByteSize::new(52) && limit == ByteSize::new(51)),
         "{error:?}"
     );
+}
+
+#[test]
+fn no_request_during_install_reaches_the_network() {
+    let network = ok_network();
+    let plugin = host_on(network.clone())
+        .unwrap()
+        .install(&fixture("fetch-in-describe").unwrap())
+        .unwrap();
+    assert_eq!(plugin.manifest().name(), "refused-host");
+    assert!(network.requests().is_empty(), "{:?}", network.requests());
 }
