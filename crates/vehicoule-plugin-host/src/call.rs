@@ -11,7 +11,7 @@ use thiserror::Error;
 
 use crate::bindings::base::vehicoule::plugin::types;
 use crate::bindings::search::SearchPluginPre;
-use crate::media::{TextSize, text_bytes};
+use crate::media::{OutputSize, output_bytes};
 use crate::{ByteSize, Capability, InstalledPlugin, ItemKind, Page, PluginHost};
 
 /// An error the plugin itself returned, as the contract names them.
@@ -57,10 +57,12 @@ pub enum PluginFailure {
     /// The plugin trapped (crashed).
     #[error("the plugin trapped: {0}")]
     Trap(String),
-    /// The value returned holds more text than the output budget.
-    #[error("the plugin returned {} bytes of text, over the ceiling of {} bytes", size.get(), limit.get())]
+    /// The value returned is over the output budget (strings and list elements, see [`HostConfig::max_output`]).
+    ///
+    /// [`HostConfig::max_output`]: crate::HostConfig::max_output
+    #[error("the plugin returned a value of size {}, over the ceiling of {}", size.get(), limit.get())]
     OutputTooLarge {
-        /// The text the value held.
+        /// The value's size.
         size: ByteSize,
         /// The ceiling.
         limit: ByteSize,
@@ -114,13 +116,13 @@ impl PluginHost {
         self.bounded(answer)
     }
 
-    /// The plugin's answer, or the failure it names, once its text is checked against the output budget. A plugin
+    /// The plugin's answer, or the failure it names, once its size is checked against the output budget. A plugin
     /// error's text counts too: it is output like any other.
-    fn bounded<T: TextSize>(&self, answer: Result<T, types::Error>) -> Result<T, PluginFailure> {
+    fn bounded<T: OutputSize>(&self, answer: Result<T, types::Error>) -> Result<T, PluginFailure> {
         let answer = answer.map_err(PluginError::from);
         let size = match &answer {
-            Ok(value) => text_bytes(value),
-            Err(error) => text_bytes(error),
+            Ok(value) => output_bytes(value),
+            Err(error) => output_bytes(error),
         };
         let limit = self.config().max_output;
         if size > limit {
@@ -130,8 +132,8 @@ impl PluginHost {
     }
 }
 
-impl TextSize for PluginError {
-    fn text_size(&self) -> usize {
+impl OutputSize for PluginError {
+    fn output_size(&self) -> usize {
         match self {
             Self::InvalidInput(text) | Self::Upstream(text) => text.len(),
             Self::NotFound | Self::Unsupported | Self::RateLimited { .. } => 0,
@@ -189,12 +191,12 @@ mod tests {
 
     #[test]
     fn a_plugin_error_counts_its_text() {
-        assert_eq!(PluginError::InvalidInput("abc".to_owned()).text_size(), 3);
-        assert_eq!(PluginError::Upstream("abcd".to_owned()).text_size(), 4);
-        assert_eq!(PluginError::NotFound.text_size(), 0);
-        assert_eq!(PluginError::Unsupported.text_size(), 0);
+        assert_eq!(PluginError::InvalidInput("abc".to_owned()).output_size(), 3);
+        assert_eq!(PluginError::Upstream("abcd".to_owned()).output_size(), 4);
+        assert_eq!(PluginError::NotFound.output_size(), 0);
+        assert_eq!(PluginError::Unsupported.output_size(), 0);
         assert_eq!(
-            PluginError::RateLimited { retry_after: None }.text_size(),
+            PluginError::RateLimited { retry_after: None }.output_size(),
             0
         );
     }

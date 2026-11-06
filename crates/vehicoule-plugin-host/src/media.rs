@@ -141,122 +141,124 @@ pub struct Page {
     pub next: Option<String>,
 }
 
-/// The bytes of text a returned value holds, for the output budget (section 6).
+/// The size of a returned value, for the output budget (section 6): the bytes of every string, plus one for every
+/// element of every list, so that a long list of empty or small values counts too.
 ///
-/// Only strings are counted. A value's other parts are bounded by the plugin's memory ceiling, since the host reads
-/// every value out of that memory.
-pub(crate) trait TextSize {
-    fn text_size(&self) -> usize;
+/// A value's fixed-size parts (numbers, enums) are bounded through its lists and by the plugin's memory ceiling, since
+/// the host reads every value out of that memory.
+pub(crate) trait OutputSize {
+    fn output_size(&self) -> usize;
 }
 
-impl TextSize for String {
-    fn text_size(&self) -> usize {
+impl OutputSize for String {
+    fn output_size(&self) -> usize {
         self.len()
     }
 }
 
-impl<T: TextSize> TextSize for Option<T> {
-    fn text_size(&self) -> usize {
-        self.as_ref().map_or(0, TextSize::text_size)
+impl<T: OutputSize> OutputSize for Option<T> {
+    fn output_size(&self) -> usize {
+        self.as_ref().map_or(0, OutputSize::output_size)
     }
 }
 
-impl<T: TextSize> TextSize for Vec<T> {
-    fn text_size(&self) -> usize {
-        self.iter()
-            .fold(0, |sum, value| sum.saturating_add(value.text_size()))
+impl<T: OutputSize> OutputSize for Vec<T> {
+    fn output_size(&self) -> usize {
+        self.iter().fold(self.len(), |sum, value| {
+            sum.saturating_add(value.output_size())
+        })
     }
 }
 
-/// The text a value holds, as a [`ByteSize`] to compare with the output budget.
-pub(crate) fn text_bytes<T: TextSize>(value: &T) -> ByteSize {
-    ByteSize::new(u64::try_from(value.text_size()).unwrap_or(u64::MAX))
+/// The output size of a value, as a [`ByteSize`] to compare with the output budget.
+pub(crate) fn output_bytes<T: OutputSize>(value: &T) -> ByteSize {
+    ByteSize::new(u64::try_from(value.output_size()).unwrap_or(u64::MAX))
 }
 
-/// The sum of the text sizes of the given parts, saturated.
+/// The sum of the output sizes of the given parts, saturated.
 fn sum(parts: &[usize]) -> usize {
     parts
         .iter()
         .fold(0, |total, part| total.saturating_add(*part))
 }
 
-impl TextSize for Artwork {
-    fn text_size(&self) -> usize {
-        self.url.text_size()
+impl OutputSize for Artwork {
+    fn output_size(&self) -> usize {
+        self.url.output_size()
     }
 }
 
-impl TextSize for ArtistRef {
-    fn text_size(&self) -> usize {
-        sum(&[self.id.text_size(), self.name.text_size()])
+impl OutputSize for ArtistRef {
+    fn output_size(&self) -> usize {
+        sum(&[self.id.output_size(), self.name.output_size()])
     }
 }
 
-impl TextSize for AlbumRef {
-    fn text_size(&self) -> usize {
-        sum(&[self.id.text_size(), self.title.text_size()])
+impl OutputSize for AlbumRef {
+    fn output_size(&self) -> usize {
+        sum(&[self.id.output_size(), self.title.output_size()])
     }
 }
 
-impl TextSize for Track {
-    fn text_size(&self) -> usize {
+impl OutputSize for Track {
+    fn output_size(&self) -> usize {
         sum(&[
-            self.id.text_size(),
-            self.title.text_size(),
-            self.artists.text_size(),
-            self.album.text_size(),
-            self.isrc.text_size(),
-            self.artwork.text_size(),
+            self.id.output_size(),
+            self.title.output_size(),
+            self.artists.output_size(),
+            self.album.output_size(),
+            self.isrc.output_size(),
+            self.artwork.output_size(),
         ])
     }
 }
 
-impl TextSize for Album {
-    fn text_size(&self) -> usize {
+impl OutputSize for Album {
+    fn output_size(&self) -> usize {
         sum(&[
-            self.id.text_size(),
-            self.title.text_size(),
-            self.artists.text_size(),
-            self.artwork.text_size(),
+            self.id.output_size(),
+            self.title.output_size(),
+            self.artists.output_size(),
+            self.artwork.output_size(),
         ])
     }
 }
 
-impl TextSize for Artist {
-    fn text_size(&self) -> usize {
+impl OutputSize for Artist {
+    fn output_size(&self) -> usize {
         sum(&[
-            self.id.text_size(),
-            self.name.text_size(),
-            self.artwork.text_size(),
+            self.id.output_size(),
+            self.name.output_size(),
+            self.artwork.output_size(),
         ])
     }
 }
 
-impl TextSize for Playlist {
-    fn text_size(&self) -> usize {
+impl OutputSize for Playlist {
+    fn output_size(&self) -> usize {
         sum(&[
-            self.id.text_size(),
-            self.title.text_size(),
-            self.owner.text_size(),
-            self.artwork.text_size(),
+            self.id.output_size(),
+            self.title.output_size(),
+            self.owner.output_size(),
+            self.artwork.output_size(),
         ])
     }
 }
 
-impl TextSize for Item {
-    fn text_size(&self) -> usize {
+impl OutputSize for Item {
+    fn output_size(&self) -> usize {
         match self {
-            Self::Track(track) => track.text_size(),
-            Self::Album(album) => album.text_size(),
-            Self::Artist(artist) => artist.text_size(),
-            Self::Playlist(playlist) => playlist.text_size(),
+            Self::Track(track) => track.output_size(),
+            Self::Album(album) => album.output_size(),
+            Self::Artist(artist) => artist.output_size(),
+            Self::Playlist(playlist) => playlist.output_size(),
         }
     }
 }
 
-impl TextSize for Page {
-    fn text_size(&self) -> usize {
-        sum(&[self.items.text_size(), self.next.text_size()])
+impl OutputSize for Page {
+    fn output_size(&self) -> usize {
+        sum(&[self.items.output_size(), self.next.output_size()])
     }
 }
 
@@ -509,8 +511,8 @@ mod tests {
     }
 
     #[test]
-    fn the_text_size_counts_every_string_once() {
-        // 1 + 5 (id, title) + 2 + 9 (artist) + 2 + 5 (album) + 12 (isrc) + 10 (artwork url) = 46.
+    fn the_output_size_counts_every_string_once() {
+        // 1 + 5 (id, title) + 1 + 2 + 9 (one artist) + 2 + 5 (album) + 12 (isrc) + 1 + 10 (one artwork) = 48.
         let track = Track {
             id: "t".to_owned(),
             title: "Title".to_owned(),
@@ -530,7 +532,7 @@ mod tests {
                 height: None,
             }],
         };
-        assert_eq!(track.text_size(), 46);
+        assert_eq!(track.output_size(), 48);
         let page = Page {
             items: vec![
                 Item::Track(track),
@@ -555,7 +557,14 @@ mod tests {
             ],
             next: Some("page-2".to_owned()),
         };
-        // 46 + (2 + 5) + (2 + 6) + (1 + 8 + 2) + 6 = 78.
-        assert_eq!(page.text_size(), 78);
+        // 4 items + 48 + (2 + 5) + (2 + 6) + (1 + 8 + 2) + 6 = 84.
+        assert_eq!(page.output_size(), 84);
+    }
+
+    #[test]
+    fn every_list_element_counts_even_when_empty() {
+        assert_eq!(vec![String::new(); 3].output_size(), 3);
+        assert_eq!(vec![vec![String::new(); 2]; 3].output_size(), 9);
+        assert_eq!(Vec::<String>::new().output_size(), 0);
     }
 }

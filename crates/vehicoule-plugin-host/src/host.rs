@@ -7,7 +7,7 @@ use wasmtime::{Engine, ResourceLimiter, Store, Trap};
 
 use crate::bindings::base::vehicoule::plugin::{http, log, types};
 use crate::bindings::{artwork, base, link_import, lyrics, metadata, radio, resolve, search};
-use crate::media::{TextSize, text_bytes};
+use crate::media::{OutputSize, output_bytes};
 use crate::{ByteSize, Capability, Domain, HostConfig, Manifest, ManifestError, PluginFailure};
 
 /// The only imports a plugin may have (section 5).
@@ -56,10 +56,10 @@ pub enum InstallError {
     /// The plugin trapped (crashed).
     #[error("the plugin trapped: {0}")]
     Trap(String),
-    /// The manifest holds more text than the output budget, which bounds `describe` as any call.
-    #[error("the manifest holds {} bytes of text, over the ceiling of {} bytes", size.get(), limit.get())]
+    /// The manifest is over the output budget, which bounds `describe` as any call.
+    #[error("the manifest has a size of {}, over the ceiling of {}", size.get(), limit.get())]
     OutputTooLarge {
-        /// The text the manifest held.
+        /// The manifest's size.
         size: ByteSize,
         /// The ceiling.
         limit: ByteSize,
@@ -251,7 +251,7 @@ impl PluginHost {
             .instantiate_pre(&component)
             .map_err(|e| InstallError::Link(e.to_string()))?;
         let raw = self.describe(&pre)?;
-        let size = text_bytes(&raw);
+        let size = output_bytes(&raw);
         if size > self.config.max_output {
             return Err(InstallError::OutputTooLarge {
                 size,
@@ -326,13 +326,15 @@ impl PluginHost {
     }
 }
 
-impl TextSize for base::exports::vehicoule::plugin::plugin::Manifest {
-    fn text_size(&self) -> usize {
+impl OutputSize for base::exports::vehicoule::plugin::plugin::Manifest {
+    fn output_size(&self) -> usize {
         [
-            self.id.text_size(),
-            self.name.text_size(),
-            self.version.text_size(),
-            self.http_hosts.text_size(),
+            self.id.output_size(),
+            self.name.output_size(),
+            self.version.output_size(),
+            self.http_hosts.output_size(),
+            self.domains.len(),
+            self.capabilities.len(),
         ]
         .iter()
         .fold(0, |total, part| total.saturating_add(*part))

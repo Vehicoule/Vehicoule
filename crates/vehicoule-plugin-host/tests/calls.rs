@@ -184,9 +184,10 @@ fn nothing_a_plugin_keeps_in_memory_survives_to_the_next_call() {
     }
 }
 
-/// The text of a `big:N` answer besides its N-byte title: `track-1` (7), `artist-1` (8), `Artist` (6), `album-1`
-/// (7), `Album` (5), the ISRC (12), the artwork URL (35) and `next` = `page-2` (6).
-const BIG_OVERHEAD: u64 = 86;
+/// The size of a `big:N` answer besides its N-byte title: one item (1), `track-1` (7), one artist (1) `artist-1` (8)
+/// `Artist` (6), `album-1` (7), `Album` (5), the ISRC (12), one artwork (1) and its URL (35), and `next` = `page-2`
+/// (6).
+const BIG_OVERHEAD: u64 = 89;
 
 #[test]
 fn an_answer_exactly_at_the_output_ceiling_is_returned() {
@@ -232,5 +233,26 @@ fn a_plugin_that_does_not_provide_search_is_not_called_for_it() {
     assert_eq!(
         host.suggest(&plugin, "daft").unwrap_err(),
         PluginFailure::NotProvided(Capability::Search)
+    );
+}
+
+#[test]
+fn a_long_list_of_empty_items_counts_toward_the_output_ceiling() {
+    // `empty:N` returns N artists with empty strings and no artwork: each counts one, plus `next` = `page-2` (6).
+    let (host, plugin) = good().unwrap();
+    let fits = MAX_OUTPUT - 6;
+    let page = host
+        .search(&plugin, &format!("empty:{fits}"), &[], None)
+        .unwrap();
+    assert_eq!(page.items.len(), usize::try_from(fits).unwrap());
+    let failure = host
+        .search(&plugin, &format!("empty:{}", fits + 1), &[], None)
+        .unwrap_err();
+    assert_eq!(
+        failure,
+        PluginFailure::OutputTooLarge {
+            size: ByteSize::new(MAX_OUTPUT + 1),
+            limit: ByteSize::new(MAX_OUTPUT),
+        }
     );
 }

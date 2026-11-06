@@ -80,7 +80,8 @@ pub struct HostConfig {
     pub fuel_per_call: Fuel,
     /// The ceiling on the bytes a call holds in all of its linear memories and tables together.
     pub max_memory: ByteSize,
-    /// The ceiling on the text a call returns: the bytes of every string in the value.
+    /// The ceiling on the size of what a call returns: the bytes of every string in the value, plus one for every
+    /// element of every list.
     pub max_output: ByteSize,
 }
 

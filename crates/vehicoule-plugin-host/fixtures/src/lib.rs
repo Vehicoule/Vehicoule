@@ -143,7 +143,8 @@ fn behavior() -> Manifest {
 }
 
 /// `search` does what its query says, so one plugin covers every call the tests make: `trap`, `loop`, `grow`,
-/// `count` (how many calls this instance has seen), `big:N` (a title of N bytes), `error:KIND`; any other query
+/// `count` (how many calls this instance has seen), `big:N` (a title of N bytes), `empty:N` (N artists with empty
+/// strings), `error:KIND`; any other query
 /// returns one item of each requested kind, titled after the query.
 #[cfg(any(feature = "good", feature = "undeclared-export"))]
 impl exports::vehicoule::plugin::search::Guest for Fixture {
@@ -204,6 +205,17 @@ impl exports::vehicoule::plugin::search::Guest for Fixture {
             "error:rate-limited" => Err(Error::RateLimited(Some(1_500))),
             "error:invalid-input" => Err(Error::InvalidInput(String::from("bad query"))),
             "error:upstream" => Err(Error::Upstream(String::from("service down"))),
+            q if q.starts_with("empty:") => {
+                let n = q.trim_start_matches("empty:").parse().unwrap_or(0);
+                let empty = || {
+                    Item::Artist(Artist {
+                        id: String::new(),
+                        name: String::new(),
+                        artwork: Vec::new(),
+                    })
+                };
+                Ok(page(std::iter::repeat_with(empty).take(n).collect()))
+            }
             q if q.starts_with("big:") => {
                 let n = q.trim_start_matches("big:").parse().unwrap_or(0);
                 Ok(page(vec![Item::Track(track("a".repeat(n)))]))

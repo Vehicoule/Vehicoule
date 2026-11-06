@@ -185,7 +185,7 @@ fn an_installed_plugin_debugs_as_its_manifest() {
 
 #[test]
 fn a_manifest_over_the_output_ceiling_is_rejected() {
-    // A 70,000-byte name, plus `fixture`, `0.1.0` and the two host patterns (15 + 17 bytes).
+    // A 70,000-byte name, plus `fixture`, `0.1.0`, the two host patterns (2 + 15 + 17) and one domain.
     let error = host()
         .unwrap()
         .install(&fixture("huge-manifest").unwrap())
@@ -194,7 +194,7 @@ fn a_manifest_over_the_output_ceiling_is_rejected() {
         matches!(
             error,
             InstallError::OutputTooLarge { size, limit }
-                if size == ByteSize::new(70_000 + 7 + 5 + 15 + 17) && limit == ByteSize::new(MAX_OUTPUT)
+                if size == ByteSize::new(70_000 + 7 + 5 + 2 + 15 + 17 + 1) && limit == ByteSize::new(MAX_OUTPUT)
         ),
         "{error:?}"
     );
@@ -202,20 +202,20 @@ fn a_manifest_over_the_output_ceiling_is_rejected() {
 
 #[test]
 fn a_manifest_exactly_at_the_output_ceiling_installs() {
-    // `fixture` (7), `good` (4), `0.1.0` (5) and the two host patterns (15 + 17): 48 bytes.
+    // `fixture` (7), `good` (4), `0.1.0` (5), the two host patterns (2 + 15 + 17), one domain and one capability: 52.
     let bytes = fixture("good").unwrap();
     assert!(
-        host_with(MAX_PLUGIN_SIZE, 48)
+        host_with(MAX_PLUGIN_SIZE, 52)
             .unwrap()
             .install(&bytes)
             .is_ok()
     );
-    let error = host_with(MAX_PLUGIN_SIZE, 47)
+    let error = host_with(MAX_PLUGIN_SIZE, 51)
         .unwrap()
         .install(&bytes)
         .unwrap_err();
     assert!(
-        matches!(error, InstallError::OutputTooLarge { size, limit } if size == ByteSize::new(48) && limit == ByteSize::new(47)),
+        matches!(error, InstallError::OutputTooLarge { size, limit } if size == ByteSize::new(52) && limit == ByteSize::new(51)),
         "{error:?}"
     );
 }
