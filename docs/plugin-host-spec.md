@@ -81,7 +81,8 @@ Returned by `describe`, validated at install:
 - **Log.** Messages are bounded in size and count per call, tagged with the plugin id, and never shown to the user as
   app text. A call keeps its first messages up to the log budget (section 6) and counts the ones after as dropped; a
   message longer than the budget is cut at a character boundary and marked as cut. Every control character, line
-  breaks included, becomes U+FFFD, so a message is one line and cannot forge another where the edge writes it. The
+  breaks included, and U+2028 and U+2029 (the line and paragraph separators, which are not control characters)
+  become U+FFFD, so a message is one line and cannot forge another where the edge writes it. The
   messages come back in the call's report (section 7), in order, for the edge to write where it keeps logs; messages
   logged during install are dropped.
 

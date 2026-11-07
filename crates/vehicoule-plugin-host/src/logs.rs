@@ -31,8 +31,8 @@ impl From<log::Level> for LogLevel {
 
 /// One message a plugin logged during a call.
 ///
-/// The message is text from untrusted code, one line long: every control character, line breaks included, is
-/// replaced with U+FFFD, so it cannot forge another line where the edge writes it.
+/// The message is text from untrusted code, one line long: every control character and every line or paragraph
+/// separator is replaced with U+FFFD, so it cannot forge another line where the edge writes it.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LogEntry {
@@ -82,13 +82,21 @@ impl Logs {
     }
 }
 
-/// `text` with every control character replaced with U+FFFD, cut at the last character that fits in `max` bytes, and
-/// whether it was cut.
+/// Whether `c` could break or rewrite a line where the edge writes it: a control character (Unicode `Cc`: C0, DEL,
+/// C1, which hold LF, CR, VT, FF and NEL), or U+2028 LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR, which are not
+/// `Cc`. Together they are every mandatory line break of Unicode's line breaking algorithm (UAX #14, class BK, CR, LF
+/// and NL).
+fn breaks_a_line(c: char) -> bool {
+    c.is_control() || matches!(c, '\u{2028}' | '\u{2029}')
+}
+
+/// `text` with every character that [breaks a line](breaks_a_line) replaced with U+FFFD, cut at the last character
+/// that fits in `max` bytes, and whether it was cut.
 fn one_line(text: &str, max: ByteSize) -> (String, bool) {
     let max = max.saturating_usize();
     let mut line = String::new();
     for c in text.chars() {
-        let c = if c.is_control() { '\u{FFFD}' } else { c };
+        let c = if breaks_a_line(c) { '\u{FFFD}' } else { c };
         if line.len().saturating_add(c.len_utf8()) > max {
             return (line, true);
         }
@@ -146,6 +154,14 @@ mod tests {
     }
 
     #[test]
+    fn line_and_paragraph_separators_become_replacement_characters() {
+        assert_eq!(
+            one_line("a\u{2028}b\u{2029}c", ByteSize::new(64)),
+            ("a\u{FFFD}b\u{FFFD}c".to_owned(), false)
+        );
+    }
+
+    #[test]
     fn messages_over_the_count_are_dropped_and_counted() {
         let mut logs = logs(2, 64);
         for message in ["one", "two", "three", "four"] {
@@ -182,13 +198,15 @@ mod tests {
     proptest! {
         #[test]
         fn a_kept_message_is_one_line_within_its_limit_and_a_prefix_of_the_cleaned_text(
-            text in "(?s).{0,40}",
+            text in "(?s)(.|\u{2028}|\u{2029}){0,40}",
             max in 0u64..48,
         ) {
             let (line, truncated) = one_line(&text, ByteSize::new(max));
-            let cleaned: String = text.chars().map(|c| if c.is_control() { '\u{FFFD}' } else { c }).collect();
+            // The rule written out, apart from `breaks_a_line`: Cc and the two separators.
+            let breaks = |c: char| c.is_control() || c == '\u{2028}' || c == '\u{2029}';
+            let cleaned: String = text.chars().map(|c| if breaks(c) { '\u{FFFD}' } else { c }).collect();
             prop_assert!(line.len() <= usize::try_from(max).unwrap());
-            prop_assert!(!line.chars().any(char::is_control));
+            prop_assert!(!line.chars().any(breaks));
             prop_assert!(cleaned.starts_with(&line));
             prop_assert_eq!(truncated, line.len() < cleaned.len());
         }
