@@ -4,6 +4,7 @@
 exclude_globs = [
     "crates/vehicoule-core/src/queue/kani_rng.rs",
     "crates/vehicoule-core/src/queue/proofs.rs",
+    "crates/vehicoule-core/src/player/proofs.rs",
     "crates/vehicoule-plugin-host/src/proof_input.rs",
     "crates/vehicoule-plugin-host/src/*/proofs.rs",
 ]

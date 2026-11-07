@@ -8,4 +8,6 @@
 //! What it must do is written in the core spec (`docs/core-playback-spec.md`); every invariant marked \[Kani\] there is
 //! a proof harness here.
 
+pub mod player;
 pub mod queue;
+pub mod time;
