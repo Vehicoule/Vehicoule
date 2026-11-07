@@ -9,8 +9,9 @@
 //! It installs a plugin: size ceiling, compilation, imports, `describe` with every request refused, manifest rules,
 //! and capabilities matched against exports
 //! ([spec](https://github.com/Vehicoule/Vehicoule/blob/main/docs/plugin-host-spec.md), sections 3 to 5). It calls
-//! the search capability in a fresh store per call, with fuel, memory and output budgets (sections 3, 6 and 7). The
-//! HTTP sandbox, wall time and the other capabilities come next.
+//! the search capability in a fresh store per call, with fuel, memory and output budgets (sections 3, 6 and 7), and
+//! gives plugins the network through a sandbox with its own budgets (sections 5 and 6). Wall time and the other
+//! capabilities come next.
 
 mod bindings;
 mod call;
@@ -18,11 +19,15 @@ mod config;
 mod host;
 mod manifest;
 mod media;
+mod network;
 
 pub use call::{PluginError, PluginFailure};
-pub use config::{ByteSize, Fuel, HostConfig};
+pub use config::{ByteSize, Fuel, HostConfig, HttpBudget};
 pub use host::{HostError, InstallError, InstalledPlugin, PluginHost};
 pub use manifest::{Capability, Domain, HostPattern, Manifest, ManifestError, PluginId};
 pub use media::{
     Album, AlbumRef, Artist, ArtistRef, Artwork, Item, ItemKind, Page, Playlist, Track,
+};
+pub use network::{
+    HttpRequest, HttpResponse, HttpsUrl, Method, Network, NetworkError, RequestLimits,
 };

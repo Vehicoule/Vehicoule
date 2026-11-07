@@ -2,8 +2,7 @@
 //!
 //! Each call gets a fresh store and a fresh instance with its own budgets, and both are dropped when it returns, so
 //! nothing a plugin keeps in its memory survives to the next call. The host reports the outcome and never retries.
-//! Calls have no network yet: every request is refused, as during install, until the HTTP sandbox and its budgets
-//! come (section 11, step 3).
+//! Requests go through the HTTP sandbox of `host.rs` (section 5).
 
 use std::time::Duration;
 
@@ -57,6 +56,15 @@ pub enum PluginFailure {
     /// The plugin trapped (crashed).
     #[error("the plugin trapped: {0}")]
     Trap(String),
+    /// The call tried to send more requests than its HTTP budget allows.
+    #[error("the plugin sent more requests than its budget")]
+    TooManyRequests,
+    /// A response body was over the HTTP budget.
+    #[error("a response body was over its budget")]
+    ResponseTooLarge,
+    /// A request took longer than its deadline.
+    #[error("a request timed out")]
+    RequestTimeout,
     /// The value returned is over the output budget (strings and list elements, see [`HostConfig::max_output`]).
     ///
     /// [`HostConfig::max_output`]: crate::HostConfig::max_output

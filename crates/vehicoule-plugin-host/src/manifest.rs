@@ -162,7 +162,7 @@ impl HostPattern {
 
 /// A host name of section 4: labels of 1 to 63 lowercase ASCII letters, digits or `-`, not starting or ending with
 /// `-`, joined by dots, at most 253 bytes, the last label holding a letter.
-fn is_host_name(name: &str) -> bool {
+pub(crate) fn is_host_name(name: &str) -> bool {
     name.len() <= 253
         && name.split('.').all(is_label)
         && name.rsplit('.').next().is_some_and(has_letter)

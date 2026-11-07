@@ -144,7 +144,8 @@ fn behavior() -> Manifest {
 
 /// `search` does what its query says, so one plugin covers every call the tests make: `trap`, `loop`, `grow`,
 /// `count` (how many calls this instance has seen), `big:N` (a title of N bytes), `empty:N` (N artists with empty
-/// strings), `error:KIND`; any other query
+/// strings), `error:KIND`, `fetch:N:URL` (N GETs), `post:URL`, `header:NAME:URL` (a GET with that header), each
+/// titled after what its requests returned; any other query
 /// returns one item of each requested kind, titled after the query.
 #[cfg(any(feature = "good", feature = "undeclared-export"))]
 impl exports::vehicoule::plugin::search::Guest for Fixture {
@@ -154,6 +155,7 @@ impl exports::vehicoule::plugin::search::Guest for Fixture {
         cursor: Option<String>,
     ) -> Result<exports::vehicoule::plugin::search::Page, vehicoule::plugin::types::Error> {
         use std::sync::atomic::{AtomicU32, Ordering};
+        use vehicoule::plugin::http::Method;
         use vehicoule::plugin::types::{
             Album, AlbumRef, Artist, ArtistRef, Artwork, Error, Item, ItemKind, Playlist, Track,
         };
@@ -205,6 +207,43 @@ impl exports::vehicoule::plugin::search::Guest for Fixture {
             "error:rate-limited" => Err(Error::RateLimited(Some(1_500))),
             "error:invalid-input" => Err(Error::InvalidInput(String::from("bad query"))),
             "error:upstream" => Err(Error::Upstream(String::from("service down"))),
+            q if q.starts_with("fetch:") => {
+                let (n, url) = q
+                    .trim_start_matches("fetch:")
+                    .split_once(':')
+                    .unwrap_or(("0", ""));
+                let n: usize = n.parse().unwrap_or(0);
+                let outcomes: Vec<String> = (0..n)
+                    .map(|_| {
+                        request(
+                            Method::Get,
+                            url,
+                            vec![(String::from("x-test"), String::from("1"))],
+                            None,
+                        )
+                    })
+                    .collect();
+                Ok(page(vec![Item::Track(track(outcomes.join(";")))]))
+            }
+            q if q.starts_with("post:") => {
+                let url = q.trim_start_matches("post:");
+                let headers = vec![(String::from("content-type"), String::from("text/plain"))];
+                let outcome = request(Method::Post, url, headers, Some(b"payload".to_vec()));
+                Ok(page(vec![Item::Track(track(outcome))]))
+            }
+            q if q.starts_with("header:") => {
+                let (name, url) = q
+                    .trim_start_matches("header:")
+                    .split_once(':')
+                    .unwrap_or(("", ""));
+                let outcome = request(
+                    Method::Get,
+                    url,
+                    vec![(String::from(name), String::from("v"))],
+                    None,
+                );
+                Ok(page(vec![Item::Track(track(outcome))]))
+            }
             q if q.starts_with("empty:") => {
                 let n = q.trim_start_matches("empty:").parse().unwrap_or(0);
                 let empty = || {
@@ -251,6 +290,34 @@ impl exports::vehicoule::plugin::search::Guest for Fixture {
 
     fn suggest(prefix: String) -> Result<Vec<String>, vehicoule::plugin::types::Error> {
         Ok(vec![prefix.clone() + " live", prefix + " remix"])
+    }
+}
+
+/// One request through the host, told as text: `STATUS:BODY` or the error's name.
+#[cfg(any(feature = "good", feature = "undeclared-export"))]
+fn request(
+    method: vehicoule::plugin::http::Method,
+    url: &str,
+    headers: Vec<(String, String)>,
+    body: Option<Vec<u8>>,
+) -> String {
+    use vehicoule::plugin::http::{HttpError, Request, fetch};
+    match fetch(&Request {
+        method,
+        url: String::from(url),
+        headers,
+        body,
+    }) {
+        Ok(response) => format!(
+            "{}:{}",
+            response.status,
+            String::from_utf8_lossy(&response.body)
+        ),
+        Err(HttpError::RefusedHost) => String::from("refused-host"),
+        Err(HttpError::RefusedScheme) => String::from("refused-scheme"),
+        Err(HttpError::BudgetExceeded) => String::from("budget-exceeded"),
+        Err(HttpError::Timeout) => String::from("timeout"),
+        Err(HttpError::Transport(message)) => format!("transport:{message}"),
     }
 }
 
