@@ -298,6 +298,9 @@ jobs:
       - name: Fuzz the queue
         working-directory: crates/vehicoule-core/fuzz
         run: cargo fuzz run queue -- -seed=1 -runs=200000
+      - name: Fuzz the player
+        working-directory: crates/vehicoule-core/fuzz
+        run: cargo fuzz run player -- -seed=1 -runs=200000
 
   # ADR 0016: the benchmarks of the core and of the plugin host count instructions under Callgrind, which does not
   # depend on the runner's load, and each one fails above its ceiling. Valgrind is pinned to the version the counts

@@ -96,6 +96,7 @@ cargo fuzz run host_pattern -- -seed=1 -runs=200000
 cargo fuzz run manifest -- -seed=1 -runs=200000
 # In crates/vehicoule-core/fuzz, on the same nightly (ADR 0015):
 cargo fuzz run queue -- -seed=1 -runs=200000
+cargo fuzz run player -- -seed=1 -runs=200000
 # In crates/vehicoule-core/bench, on Linux with Valgrind and gungraun-runner 0.20.0 (ADR 0016):
 cargo bench --locked
 # In crates/vehicoule-plugin-host/bench, the same, with the test plugins in $FIXTURES:

@@ -1,13 +1,19 @@
 //! The player model of one session (core spec, section 4:
 //! <https://github.com/Vehicoule/Vehicoule/blob/main/docs/core-playback-spec.md>).
 //!
+//! A [`Player`] moves between the [`State`]s of the spec on [`Event`]s, and answers each with the [`Command`]s the
+//! edges must run, as the spec's table of transitions says.
+//!
 //! The position is never polled. The platform player reports where it is when something changes, and the core keeps
 //! that report as an [`Anchor`], from which it computes the position at any instant.
 
+mod machine;
 #[cfg(kani)]
 mod proofs;
 #[cfg(test)]
 mod tests;
+
+pub use machine::{Command, Commands, Event, Player, Request, State};
 
 use crate::time::Instant;
 use std::time::Duration;

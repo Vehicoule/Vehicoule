@@ -26,3 +26,10 @@ path = "fuzz_targets/queue.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "player"
+path = "fuzz_targets/player.rs"
+test = false
+doc = false
+bench = false
