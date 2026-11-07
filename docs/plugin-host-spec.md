@@ -109,6 +109,13 @@ A call returns either the plugin's value or one `PluginFailure`, typed and `#[no
 The host reports; the core decides. The host never retries, never falls back to another plugin and never hides a
 failure behind a default value.
 
+Every capability call also returns a report of what it used, with its value or its failure: the fuel it consumed, the
+peak bytes of its memories and tables together, the requests it sent to the network, the requests the sandbox refused,
+and the size of what the plugin returned (a value or its own error, as the output budget counts it), or none when it
+returned nothing. A call to a capability the plugin does not provide never runs and reports nothing used. The report
+is what the measurements of section 9 read. It does not hold the wall time yet: Wasmtime 48.0.8 gives no way to read
+the epoch (`Engine` has `increment_epoch` and no getter), so how to count a call's ticks is a later change.
+
 ## 8. Contract 0.1.0
 
 Written in WIT. Durations are milliseconds in `u64` fields named `-ms`, because WIT has no duration type; the host

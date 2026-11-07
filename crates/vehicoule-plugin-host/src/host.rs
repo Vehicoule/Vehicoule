@@ -13,8 +13,8 @@ use crate::bindings::{artwork, base, link_import, lyrics, metadata, radio, resol
 use crate::media::{OutputSize, output_bytes};
 use crate::network::{HeaderRefusal, HttpsUrl, RequestLimits, UrlRefusal, header_refusal};
 use crate::{
-    ByteSize, Capability, Domain, HostConfig, HostPattern, HttpBudget, HttpRequest, Manifest,
-    ManifestError, Method, Network, NetworkError, PluginFailure,
+    ByteSize, CallReport, Capability, Domain, Fuel, HostConfig, HostPattern, HttpBudget,
+    HttpRequest, Manifest, ManifestError, Method, Network, NetworkError, PluginFailure,
 };
 
 /// The only imports a plugin may have (section 5).
@@ -119,6 +119,8 @@ pub(crate) struct CallState {
     http: Http,
     /// Set when an HTTP budget ended the call, so the failure names it rather than the trap that stopped the plugin.
     http_stop: Option<HttpStop>,
+    /// The requests of a capability call that the sandbox refused, for the call's report.
+    requests_refused: u32,
 }
 
 /// What a call may do on the network.
@@ -143,6 +145,21 @@ pub(crate) enum HttpStop {
 }
 
 impl CallState {
+    /// What the call used, read once it returned or stopped. `fuel` is the call's whole fuel and `fuel_left` what
+    /// Wasmtime says is left of it.
+    fn report(&self, fuel: Fuel, fuel_left: u64) -> CallReport {
+        CallReport {
+            fuel_used: Fuel::new(fuel.get().saturating_sub(fuel_left)),
+            memory_peak: ByteSize::new(u64::try_from(self.limiter.used_bytes).unwrap_or(u64::MAX)),
+            requests_sent: match self.http {
+                Http::Granted { sent, .. } => sent,
+                Http::Refused => 0,
+            },
+            requests_refused: self.requests_refused,
+            output: None,
+        }
+    }
+
     /// Ends the call because of `stop`.
     fn stop(&mut self, stop: HttpStop) -> wasmtime::Error {
         self.http_stop = Some(stop);
@@ -168,26 +185,13 @@ impl http::Host for CallState {
         else {
             return Ok(Err(http::HttpError::RefusedHost));
         };
-        let url = match HttpsUrl::parse(&request.url) {
+        let url = match checked_url(&request, hosts) {
             Ok(url) => url,
-            Err(UrlRefusal::Scheme) => return Ok(Err(http::HttpError::RefusedScheme)),
-            Err(UrlRefusal::Host) => return Ok(Err(http::HttpError::RefusedHost)),
-        };
-        if !hosts.iter().any(|pattern| pattern.matches(url.host())) {
-            return Ok(Err(http::HttpError::RefusedHost));
-        }
-        for (name, value) in &request.headers {
-            match header_refusal(name, value) {
-                Some(HeaderRefusal::Host) => return Ok(Err(http::HttpError::RefusedHost)),
-                Some(HeaderRefusal::Malformed) => {
-                    return Ok(Err(http::HttpError::Transport(format!(
-                        "header `{}` cannot be sent",
-                        name.escape_debug()
-                    ))));
-                }
-                None => {}
+            Err(refusal) => {
+                self.requests_refused = self.requests_refused.saturating_add(1);
+                return Ok(Err(refusal));
             }
-        }
+        };
         if *sent >= budget.max_requests {
             return Err(self.stop(HttpStop::TooManyRequests));
         }
@@ -220,6 +224,34 @@ impl http::Host for CallState {
             Err(NetworkError::Transport(message)) => Ok(Err(http::HttpError::Transport(message))),
         }
     }
+}
+
+/// The request's URL if the sandbox lets the request through to `hosts` (section 5), or the error the plugin gets.
+fn checked_url(
+    request: &http::Request,
+    hosts: &[HostPattern],
+) -> Result<HttpsUrl, http::HttpError> {
+    let url = match HttpsUrl::parse(&request.url) {
+        Ok(url) => url,
+        Err(UrlRefusal::Scheme) => return Err(http::HttpError::RefusedScheme),
+        Err(UrlRefusal::Host) => return Err(http::HttpError::RefusedHost),
+    };
+    if !hosts.iter().any(|pattern| pattern.matches(url.host())) {
+        return Err(http::HttpError::RefusedHost);
+    }
+    for (name, value) in &request.headers {
+        match header_refusal(name, value) {
+            Some(HeaderRefusal::Host) => return Err(http::HttpError::RefusedHost),
+            Some(HeaderRefusal::Malformed) => {
+                return Err(http::HttpError::Transport(format!(
+                    "header `{}` cannot be sent",
+                    name.escape_debug()
+                )));
+            }
+            None => {}
+        }
+    }
+    Ok(url)
 }
 
 impl log::Host for CallState {
@@ -445,15 +477,18 @@ impl PluginHost {
     }
 
     /// Runs `call` against a fresh instance of `plugin` if it provides `capability`, in a fresh store with the call's
-    /// budgets, and names what stopped it if it did not return.
+    /// budgets, names what stopped it if it did not return, and reports what it used.
     pub(crate) fn call<R>(
         &self,
         plugin: &InstalledPlugin,
         capability: Capability,
         call: impl FnOnce(&mut Store<CallState>, &InstancePre<CallState>) -> wasmtime::Result<R>,
-    ) -> Result<R, PluginFailure> {
+    ) -> (Result<R, PluginFailure>, CallReport) {
         if !plugin.manifest.capabilities().contains(&capability) {
-            return Err(PluginFailure::NotProvided(capability));
+            return (
+                Err(PluginFailure::NotProvided(capability)),
+                CallReport::default(),
+            );
         }
         let http = Http::Granted {
             hosts: plugin.manifest.http_hosts().to_vec(),
@@ -461,8 +496,21 @@ impl PluginHost {
             budget: self.config.http,
             sent: 0,
         };
-        let mut store = self.store(http).map_err(|e| Stop::Runtime(e.to_string()))?;
-        call(&mut store, &plugin.pre).map_err(|e| stop(&e, &store).into())
+        let mut store = match self.store(http) {
+            Ok(store) => store,
+            Err(e) => {
+                return (
+                    Err(Stop::Runtime(e.to_string()).into()),
+                    CallReport::default(),
+                );
+            }
+        };
+        let outcome = call(&mut store, &plugin.pre).map_err(|e| stop(&e, &store).into());
+        // Fuel is always on (`PluginHost::new`), so this cannot fail; if it did, the whole fuel would be reported as
+        // used, never less than was.
+        let fuel_left = store.get_fuel().unwrap_or(0);
+        let report = store.data().report(self.config.fuel_per_call, fuel_left);
+        (outcome, report)
     }
 
     /// A store for one call: its own memory ceiling, its own fuel, its own wall time and its own network grant.
@@ -473,6 +521,7 @@ impl PluginHost {
                 limiter: MemoryLimiter::new(self.config.max_memory),
                 http,
                 http_stop: None,
+                requests_refused: 0,
             },
         );
         store.limiter(|state| &mut state.limiter);
