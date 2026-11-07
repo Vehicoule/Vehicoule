@@ -51,3 +51,10 @@ path = ".claude/skills/rust-coding-guidelines/**"
 precedence = "override"
 SPDX-FileCopyrightText = "The authors of https://github.com/actionbook/rust-skills"
 SPDX-License-Identifier = "MIT"
+
+# The Contributor Covenant 3.0, with this project's reporting address filled in.
+[[annotations]]
+path = "CODE_OF_CONDUCT.md"
+precedence = "override"
+SPDX-FileCopyrightText = "Organization for Ethical Source"
+SPDX-License-Identifier = "CC-BY-SA-4.0"
