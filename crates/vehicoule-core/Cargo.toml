@@ -8,6 +8,10 @@ repository.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+# Makes `Queue::invariants_hold` public, for the fuzz targets in `fuzz/` (ADR 0015). Never enabled by the app.
+fuzzing = []
+
 [dependencies]
 thiserror.workspace = true
 

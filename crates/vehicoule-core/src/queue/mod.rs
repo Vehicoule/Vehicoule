@@ -434,8 +434,21 @@ impl<M> Queue<M> {
 
     /// The queue's invariants (core spec, section 3): `current` is an entry, ids are unique and were all given out,
     /// and the play order holds every entry exactly once.
-    #[cfg(any(test, kani))]
-    pub(crate) fn invariants_hold(&self) -> bool {
+    ///
+    /// Only in tests, Kani proofs and builds with the `fuzzing` feature, for the fuzz targets (ADR 0015): no caller in
+    /// the app needs it, since every operation keeps the invariants.
+    ///
+    /// ```
+    /// use vehicoule_core::queue::{Queue, QueueSource};
+    ///
+    /// let mut queue = Queue::new();
+    /// queue.replace(QueueSource::Selection, ["a", "b"], Some(1))?;
+    /// assert!(queue.invariants_hold());
+    /// # Ok::<(), vehicoule_core::queue::QueueError>(())
+    /// ```
+    #[cfg(any(test, kani, feature = "fuzzing"))]
+    #[must_use]
+    pub fn invariants_hold(&self) -> bool {
         // No allocation here: under Kani every heap object multiplies the cost of each pointer dereference.
         let entries = &self.entries;
         let unique = entries.iter().enumerate().all(|(i, entry)| {
