@@ -300,7 +300,8 @@ jobs:
         run: cargo fuzz run queue -- -seed=1 -runs=200000
 
   # ADR 0016: the core's benchmarks count instructions under Callgrind, which does not depend on the runner's load,
-  # and each one fails above its ceiling. The runner's image is pinned so that Valgrind's version stays the same.
+  # and each one fails above its ceiling. Valgrind is pinned to the version the counts were recorded with: the install
+  # fails when the image no longer offers it, rather than counting with another one.
   # The first run of its 19 benchmarks took 6 s after the build, and the job 1.5 min with the installs.
   bench:
     name: bench
@@ -321,8 +322,8 @@ jobs:
       - name: Install Valgrind and gungraun-runner
         run: |
           sudo apt-get update
-          sudo apt-get install -y valgrind
-          valgrind --version
+          sudo apt-get install -y valgrind=1:3.22.0-0ubuntu3
+          test "$(valgrind --version)" = valgrind-3.22.0
           cargo install gungraun-runner --version 0.20.0 --locked
       - name: Format
         run: cargo fmt --check

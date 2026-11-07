@@ -38,8 +38,12 @@ Option 1, chosen by the user on 2026-11-07:
 - The benchmarks live in `crates/vehicoule-core/bench/`, a workspace of its own like the fuzz targets
   ([ADR 0015](0015-fuzz-the-cores-state-machines.md)), with its own `Cargo.lock`: gungraun never joins the app's
   dependency graph. `cargo deny` checks that workspace.
-- The CI's `bench` job runs on a pinned runner image (`ubuntu-24.04`), so that Valgrind's version only changes in a
-  pull request that changes the image; it prints that version. It installs `gungraun-runner` at gungraun's version.
+- The CI's `bench` job runs on `ubuntu-24.04` and installs Valgrind at the exact package version the counts were
+  recorded with (`1:3.22.0-0ubuntu3`), and checks it: when GitHub's weekly image updates no longer offer it, the job
+  fails at the install instead of counting with another Valgrind. Moving to another version is a pull request that
+  records the counts again. It installs `gungraun-runner` at gungraun's version.
+- The rest of the image (the C library, the kernel) can still change under the counts. The margin absorbs small
+  shifts; a larger one fails the job with no code change, and is then recorded again in a pull request of its own.
 - The margin over a recorded count is 10 %, and at least 100 instructions: the same build counted up to 32
   instructions apart in CI and locally, in the benchmarks that allocate (one run each), so 10 % of a count of a few
   dozen would fail on noise.
