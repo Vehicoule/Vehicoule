@@ -27,7 +27,7 @@ site may describe a newer version than the one this repository builds against.
 | Unused dependencies | https://github.com/bnjbvr/cargo-machete | `0.9.2`, installed by CI (`.github/workflows/ci.yml`) |
 | Workflow audit | https://docs.zizmor.sh | `zizmor` `1.32.0`, installed by CI (`.github/workflows/ci.yml`) |
 | Fuzzing | https://rust-fuzz.github.io/book/cargo-fuzz.html | `cargo-fuzz` `0.13.2`, installed by CI; `libfuzzer-sys` `0.4.13`; toolchain `nightly-2026-11-01`, in [`crates/vehicoule-plugin-host/fuzz/rust-toolchain.toml`](../crates/vehicoule-plugin-host/fuzz/rust-toolchain.toml) and [`crates/vehicoule-core/fuzz/rust-toolchain.toml`](../crates/vehicoule-core/fuzz/rust-toolchain.toml) ([ADR 0013](adr/0013-fuzz-the-plugin-hosts-untrusted-inputs.md), [ADR 0015](adr/0015-fuzz-the-cores-state-machines.md)) |
-| Benchmarks | https://github.com/gungraun/gungraun | `gungraun` and `gungraun-runner` `0.20.0` (formerly iai-callgrind), in [`crates/vehicoule-core/bench/Cargo.toml`](../crates/vehicoule-core/bench/Cargo.toml) and installed by CI; Valgrind from the `ubuntu-24.04` runner image ([ADR 0016](adr/0016-count-the-cores-instructions-with-callgrind.md)) |
+| Benchmarks | https://github.com/gungraun/gungraun | `gungraun` and `gungraun-runner` `0.20.0` (formerly iai-callgrind), in [`crates/vehicoule-core/bench/Cargo.toml`](../crates/vehicoule-core/bench/Cargo.toml) and [`crates/vehicoule-plugin-host/bench/Cargo.toml`](../crates/vehicoule-plugin-host/bench/Cargo.toml) and installed by CI; Valgrind from the `ubuntu-24.04` runner image ([ADR 0016](adr/0016-count-the-cores-instructions-with-callgrind.md)) |
 
 ## NSH and the component library
 

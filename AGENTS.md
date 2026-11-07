@@ -79,6 +79,7 @@ cargo deny check
 cargo deny --manifest-path crates/vehicoule-plugin-host/fuzz/Cargo.toml check
 cargo deny --manifest-path crates/vehicoule-core/fuzz/Cargo.toml check
 cargo deny --manifest-path crates/vehicoule-core/bench/Cargo.toml check
+cargo deny --manifest-path crates/vehicoule-plugin-host/bench/Cargo.toml check
 cargo mutants --workspace --cargo-arg=--locked   # cargo-mutants 27.1.0
 wasm-tools component wit wit/ > /dev/null       # wasm-tools 1.263.0, the plugin contract parses
 scripts/test-check-wit-compat.sh                 # the contract's version check passes its cases
@@ -97,6 +98,8 @@ cargo fuzz run manifest -- -seed=1 -runs=200000
 cargo fuzz run queue -- -seed=1 -runs=200000
 # In crates/vehicoule-core/bench, on Linux with Valgrind and gungraun-runner 0.20.0 (ADR 0016):
 cargo bench --locked
+# In crates/vehicoule-plugin-host/bench, the same, with the test plugins in $FIXTURES:
+VEHICOULE_PLUGIN_FIXTURES="$FIXTURES" cargo bench --locked
 ```
 
 Kani proofs live in `#[cfg(kani)]` modules beside the code they prove ([ADR 0004](docs/adr/0004-verification.md)). The

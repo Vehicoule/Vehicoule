@@ -49,8 +49,9 @@ Option 1, chosen by the user on 2026-11-07:
   dozen would fail on noise.
 - The first benchmarks cover every queue operation on a queue of 10,000 entries, unshuffled and shuffled. That length
   is chosen for the benchmarks; the core spec sets no limit on the queue's length.
-- Plugin loading gets its benchmark in a pull request coordinated with the plugin host's work. Its cost under Valgrind
-  is not measured yet.
+- Plugin loading gets its benchmark in a pull request coordinated with the plugin host's work. It lives in
+  `crates/vehicoule-plugin-host/bench/`, a workspace of its own, and counts the install of the host's `good` test
+  plugin: about 646 million instructions, 15 s under Valgrind locally (Valgrind 3.22.0, one run).
 - A new core state machine comes with its benchmarks, as it comes with its proofs and its fuzz target.
 
 ## Consequences
