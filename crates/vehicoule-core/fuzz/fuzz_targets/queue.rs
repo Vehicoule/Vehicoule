@@ -183,10 +183,10 @@ fn step(
             assert_eq!(after.get(..before_ids.len()), Some(before_ids.as_slice()));
             let added = after.get(before_ids.len()..).unwrap_or_default().to_vec();
             check_added(queue, &added, &media, origin, seen);
-            assert_eq!(
-                play_ids(queue).get(play_ids(&before).len()..),
-                Some(added.as_slice())
-            );
+            // In the play order too, after the old play order, which stays as it was even when shuffled.
+            let mut expected_play = play_ids(&before);
+            expected_play.extend_from_slice(&added);
+            assert_eq!(play_ids(queue), expected_play);
             assert_eq!(current_id(queue), before_current);
         }
         3 => {
