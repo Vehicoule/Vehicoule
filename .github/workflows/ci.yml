@@ -91,10 +91,18 @@ jobs:
           echo "The shards' result: $RESULT"
           test "$RESULT" = success
 
-  # ADR 0004: the core's invariants, proved by Kani on every pull request.
-  kani:
-    name: kani
+  # ADR 0004: the core's invariants, proved by Kani on every pull request. The harnesses are split across shards,
+  # since one job runs them one after the other.
+  kani-shard:
+    name: kani shard ${{ matrix.shard }}/7
     runs-on: ubuntu-latest
+    strategy:
+      # One failing shard must not hide the proofs the others fail.
+      fail-fast: false
+      matrix:
+        # 7 shards, prime to the 4 starting lengths of each operation's proofs: the costly 3-entry proofs, one in
+        # four of the sorted list, then land in every shard instead of in two.
+        shard: [0, 1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install the pinned toolchain
@@ -105,8 +113,47 @@ jobs:
         run: |
           cargo install kani-verifier --version 0.68.0 --locked
           cargo kani setup
-      - name: Prove
-        run: cargo kani --workspace
+      - name: Prove this shard's harnesses
+        # Every harness is listed, so a new one is proved without editing this file. Each shard takes every 7th of
+        # the sorted list and checks that Kani verified exactly as many: an empty or short list must not pass.
+        env:
+          SHARD: ${{ matrix.shard }}
+          SHARDS: 7
+        run: |
+          cargo kani list --format json
+          contracts=$(jq '.totals."contract-harnesses"' kani-list.json)
+          if [ "$contracts" != 0 ]; then
+            echo "Found $contracts contract harnesses, which this job does not run yet."
+            exit 1
+          fi
+          total=$(jq '.totals."standard-harnesses"' kani-list.json)
+          mapfile -t harnesses < <(jq -r '."standard-harnesses"[][]' kani-list.json | LC_ALL=C sort \
+            | awk -v shard="$SHARD" -v shards="$SHARDS" '(NR - 1) % shards == shard')
+          count=${#harnesses[@]}
+          echo "Shard $SHARD of $SHARDS: $count of $total harnesses."
+          test "$total" -ge "$SHARDS"
+          test "$count" -gt 0
+          args=()
+          for harness in "${harnesses[@]}"; do
+            args+=(--harness "$harness")
+          done
+          cargo kani --workspace --exact "${args[@]}" | tee "$RUNNER_TEMP/kani.log"
+          grep -qx "Complete - $count successfully verified harnesses, 0 failures, $count total." "$RUNNER_TEMP/kani.log"
+
+  # The required check: green only when every shard is. `always()` makes it run, and fail, when a shard fails or is
+  # cancelled; without it, it would be skipped, and a skipped required check counts as passed.
+  kani:
+    name: kani
+    needs: kani-shard
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every shard passed
+        env:
+          RESULT: ${{ needs.kani-shard.result }}
+        run: |
+          echo "The shards' result: $RESULT"
+          test "$RESULT" = success
 
   deny:
     name: deny
