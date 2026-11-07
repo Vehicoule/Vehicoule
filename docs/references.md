@@ -24,6 +24,7 @@ site may describe a newer version than the one this repository builds against.
 | Property tests | https://docs.rs/proptest | `1.12.0` in the root `Cargo.toml`, exact version in `Cargo.lock` |
 | WIT parser (plugin contract) | https://github.com/bytecodealliance/wasm-tools | `1.263.0`, installed by CI (`.github/workflows/ci.yml`) |
 | Spell check | https://github.com/crate-ci/typos | `typos-cli` `1.52.0`, installed by CI (`.github/workflows/ci.yml`) |
+| Unused dependencies | https://github.com/bnjbvr/cargo-machete | `0.9.2`, installed by CI (`.github/workflows/ci.yml`) |
 
 ## NSH and the component library
 
