@@ -89,7 +89,8 @@ fn step(
         }
     };
 
-    match u.int_in_range(0..=11_u8)? {
+    let operation = u.int_in_range(0..=11_u8)?;
+    match operation {
         0 => {
             let source = if u.arbitrary()? {
                 QueueSource::Collection(u.arbitrary()?)
@@ -326,6 +327,13 @@ fn step(
         }
     }
 
+    // Only `set_repeat` changes the repeat mode, and only `shuffle` and `unshuffle` turn the shuffle on or off.
+    if operation != 6 {
+        assert_eq!(queue.repeat(), before.repeat());
+    }
+    if !matches!(operation, 7 | 8) {
+        assert_eq!(queue.is_shuffled(), before.is_shuffled());
+    }
     check_state(queue);
     for id in ids(queue) {
         if seen.insert(id) {
