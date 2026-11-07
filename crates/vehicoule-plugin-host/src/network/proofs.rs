@@ -33,8 +33,12 @@ fn a_url_is_kept_only_with_a_clean_host() {
             assert!(url[SCHEME.len()..parts.end].iter().all(|b| *b != b'#'));
             assert!(parts.end == url.len() || url[parts.end] == b'#');
         }
-        Err(UrlRefusal::Scheme) => assert!(!url.starts_with(SCHEME)),
-        Err(UrlRefusal::Host) => assert!(url.starts_with(SCHEME)),
+        Err(UrlRefusal::Scheme) => {
+            assert!(!url.starts_with(SCHEME));
+        }
+        Err(UrlRefusal::Host) => {
+            assert!(url.starts_with(SCHEME));
+        }
     }
 }
 
