@@ -178,7 +178,21 @@ impl<M> Queue<M> {
     pub fn play_order(&self) -> Vec<&Entry<M>> {
         match &self.shuffle {
             Shuffle::Off => self.entries.iter().collect(),
-            Shuffle::On { order, .. } => order.iter().filter_map(|id| self.entry(*id)).collect(),
+            Shuffle::On { order, .. } => {
+                // Sorted by id once, so that each id of the order is found by a binary search: looking each one up
+                // among the entries would cost the square of the queue's length (ADR 0016, benchmark `play_order`).
+                let mut by_id: Vec<&Entry<M>> = self.entries.iter().collect();
+                by_id.sort_unstable_by_key(|entry| entry.id);
+                order
+                    .iter()
+                    .filter_map(|id| {
+                        by_id
+                            .binary_search_by_key(id, |entry| entry.id)
+                            .ok()
+                            .and_then(|at| by_id.get(at).copied())
+                    })
+                    .collect()
+            }
         }
     }
 
