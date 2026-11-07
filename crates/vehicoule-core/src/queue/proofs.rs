@@ -9,8 +9,9 @@
 //! - **Every operation, inductively, on small queues.** Starting from *any* queue of 0 to 3 entries that satisfies the
 //!   invariants, with any current entry, repeat mode, shuffled order and next id, and with any arguments, each
 //!   operation keeps the invariants, loses or duplicates no entry (invariant 5), and leaves the queue unchanged when it
-//!   refuses. Operations that add entries are proved with 0 to 2 new entries, from the first free id; that they refuse
-//!   exactly when the ids run out is proved from every next id that leaves too few free ids, or just enough.
+//!   refuses. Operations that add entries are proved with 0 to 2 new entries, from the first free id, and again from
+//!   every next id that leaves too few free ids, or just enough: they refuse exactly when the ids run out, and give
+//!   out the ids that follow the next id.
 //!
 //! Kani also proves that none of this code panics on these inputs.
 //!
@@ -191,66 +192,82 @@ fn holds(queue: &Queue<u8>) -> bool {
 
 /// The smallest next id of a starting queue: operations that add entries are proved from it, because a symbolic next
 /// id makes every new id symbolic and the proofs run out of memory. The ids' values matter only where they run out,
-/// which the `ids_run_out` proofs check from every next id that leaves too few free ids, or just enough.
+/// so the same proofs run again from every next id that leaves too few free ids, or just enough.
 const FIRST_FREE_ID: u64 = 3;
 
-/// Adding `ADDED` entries with `add` from a next id that leaves `LEFT` free ids: the operation refuses and changes
-/// nothing exactly when fewer than `ADDED` are left. The last id, `u64::MAX`, is never given out, since the next id
-/// must stay above every id given out.
-fn ids_run_out<const ADDED: usize, const LEFT: u64>(
-    len: usize,
-    add: impl Fn(&mut Queue<u8>, [u8; ADDED]) -> Result<(), QueueError>,
-) {
-    let (mut queue, start) = valid_queue(len, u64::MAX - LEFT);
-    let result = add(&mut queue, kani::any());
-    if LEFT < ADDED as u64 {
-        assert!(result == Err(QueueError::IdsExhausted));
-        assert!(start.is(&queue));
-    } else {
-        assert!(result.is_ok());
-        assert!(queue.next_id == u64::MAX);
-    }
+/// Whether `added` new entries fit in the ids left from `next_id`. The last id, `u64::MAX`, is never given out, since
+/// the next id must stay above every id given out.
+fn ids_left_for(next_id: u64, added: usize) -> bool {
+    added as u64 <= u64::MAX - next_id
 }
 
-fn replace<const ADDED: usize>(len: usize) {
-    let (mut queue, start) = valid_queue(len, FIRST_FREE_ID);
+/// The id given to the entry added at `offset` from `next_id`; only called once the ids are known to fit.
+fn new_id(next_id: u64, offset: usize) -> EntryId {
+    EntryId(next_id + offset as u64)
+}
+
+/// After `ADDED` entries were added from `next_id`, the queue's next id follows the last id given out.
+fn next_id_moved_on<const ADDED: usize>(queue: &Queue<u8>, next_id: u64) -> bool {
+    queue.next_id == next_id + ADDED as u64
+}
+
+fn replace<const ADDED: usize>(len: usize, next_id: u64) {
+    let (mut queue, start) = valid_queue(len, next_id);
     let media: [u8; ADDED] = kani::any();
     let position: Option<usize> = kani::any();
     match queue.replace(QueueSource::Collection(kani::any()), media, position) {
         Ok(()) => {
+            assert!(ids_left_for(next_id, ADDED));
+            assert!(position.is_none_or(|i| i < ADDED));
             assert!(holds(&queue));
+            assert!(next_id_moved_on::<ADDED>(&queue, next_id));
             assert!(queue.len() == ADDED);
             assert!(
                 queue
                     .entries
                     .iter()
                     .zip(media)
-                    .all(|(e, m)| e.media == m && e.origin == Origin::Source)
+                    .enumerate()
+                    .all(|(offset, (e, m))| e.id == new_id(next_id, offset)
+                        && e.media == m
+                        && e.origin == Origin::Source)
             );
             assert!(queue.current == position.and_then(|i| queue.entries.get(i)).map(Entry::id));
             assert!(queue.is_shuffled() == start.order.is_some() && queue.repeat == start.repeat);
         }
-        Err(_) => {
+        Err(error) => {
+            if ids_left_for(next_id, ADDED) {
+                assert!(position.is_some_and(|i| i >= ADDED
+                    && error
+                        == QueueError::OutOfRange {
+                            position: i,
+                            len: ADDED
+                        }));
+            } else {
+                assert!(error == QueueError::IdsExhausted);
+            }
             assert!(start.is(&queue));
         }
     }
 }
 
 /// `play_next` is proved in two halves, the queue in order and shuffled: proved at once, it runs out of memory.
-fn play_next_in_order<const ADDED: usize>(len: usize) {
-    play_next::<ADDED>(len, false);
+fn play_next_in_order<const ADDED: usize>(len: usize, next_id: u64) {
+    play_next::<ADDED>(len, next_id, false);
 }
 
-fn play_next_shuffled<const ADDED: usize>(len: usize) {
-    play_next::<ADDED>(len, true);
+fn play_next_shuffled<const ADDED: usize>(len: usize, next_id: u64) {
+    play_next::<ADDED>(len, next_id, true);
 }
 
-fn play_next<const ADDED: usize>(len: usize, shuffled: bool) {
-    let (mut queue, start) = valid_queue_shuffled(len, FIRST_FREE_ID, shuffled);
+fn play_next<const ADDED: usize>(len: usize, next_id: u64, shuffled: bool) {
+    let (mut queue, start) = valid_queue_shuffled(len, next_id, shuffled);
     let media: [u8; ADDED] = kani::any();
     match queue.play_next(media) {
         Ok(()) => {
+            assert!(ids_left_for(next_id, ADDED));
             assert!(holds(&queue));
+            assert!(next_id_moved_on::<ADDED>(&queue, next_id));
             assert!(start.all_kept_in(&queue, ADDED));
             assert!(queue.current == start.current);
             // The new entries come right after the current one, in their order, in the queue and the play order.
@@ -258,18 +275,20 @@ fn play_next<const ADDED: usize>(len: usize, shuffled: bool) {
             let play_at = index_after(start.current.and_then(|c| start.play_position(c)));
             for (offset, m) in media.into_iter().enumerate() {
                 let entry = &queue.entries[at + offset];
+                assert!(entry.id == new_id(next_id, offset));
                 assert!(entry.media == m && entry.origin == Origin::Manual);
                 assert!(queue.play_id_at(play_at + offset) == Some(entry.id));
             }
         }
-        Err(_) => {
+        Err(error) => {
+            assert!(error == QueueError::IdsExhausted && !ids_left_for(next_id, ADDED));
             assert!(start.is(&queue));
         }
     }
 }
 
-fn append<const ADDED: usize>(len: usize) {
-    let (mut queue, start) = valid_queue(len, FIRST_FREE_ID);
+fn append<const ADDED: usize>(len: usize, next_id: u64) {
+    let (mut queue, start) = valid_queue(len, next_id);
     let media: [u8; ADDED] = kani::any();
     let origin = if kani::any() {
         Origin::Manual
@@ -278,16 +297,20 @@ fn append<const ADDED: usize>(len: usize) {
     };
     match queue.append(media, origin) {
         Ok(()) => {
+            assert!(ids_left_for(next_id, ADDED));
             assert!(holds(&queue));
+            assert!(next_id_moved_on::<ADDED>(&queue, next_id));
             assert!(start.all_kept_in(&queue, ADDED));
             assert!(queue.current == start.current);
             for (offset, m) in media.into_iter().enumerate() {
                 let entry = &queue.entries[len + offset];
+                assert!(entry.id == new_id(next_id, offset));
                 assert!(entry.media == m && entry.origin == origin);
                 assert!(queue.play_id_at(len + offset) == Some(entry.id));
             }
         }
-        Err(_) => {
+        Err(error) => {
+            assert!(error == QueueError::IdsExhausted && !ids_left_for(next_id, ADDED));
             assert!(start.is(&queue));
         }
     }
@@ -542,28 +565,28 @@ macro_rules! proofs_for_each_length_and_added {
             #[kani::unwind(6)]
             $(#[kani::solver($solver)])?
             fn from_0_entries() {
-                super::super::$check::<$added>(0);
+                super::super::$check::<$added>(0, super::super::FIRST_FREE_ID);
             }
 
             #[kani::proof]
             #[kani::unwind(6)]
             $(#[kani::solver($solver)])?
             fn from_1_entry() {
-                super::super::$check::<$added>(1);
+                super::super::$check::<$added>(1, super::super::FIRST_FREE_ID);
             }
 
             #[kani::proof]
             #[kani::unwind(6)]
             $(#[kani::solver($solver)])?
             fn from_2_entries() {
-                super::super::$check::<$added>(2);
+                super::super::$check::<$added>(2, super::super::FIRST_FREE_ID);
             }
 
             #[kani::proof]
             #[kani::unwind(6)]
             $(#[kani::solver($solver)])?
             fn from_3_entries() {
-                super::super::$check::<$added>(3);
+                super::super::$check::<$added>(3, super::super::FIRST_FREE_ID);
             }
         }
     };
@@ -577,54 +600,52 @@ proofs_for_each_length!(
 proofs_for_each_length_and_added!(replace, play_next_in_order, play_next_shuffled with minisat, append);
 
 /// One proof per operation that adds entries, number added, free ids left (one short and refused, or just enough and
-/// accepted) and starting length.
+/// accepted) and starting length, with the same checks as from the first free id.
 macro_rules! ids_run_out_proofs {
-    ($($module:ident: $add:expr),* $(,)?) => {
-        $(
-            mod $module {
-                use super::*;
-
-                ids_run_out_proofs!(@case $add, adding_1_with_0_left, 1, 0);
-                ids_run_out_proofs!(@case $add, adding_1_with_1_left, 1, 1);
-                ids_run_out_proofs!(@case $add, adding_2_with_0_left, 2, 0);
-                ids_run_out_proofs!(@case $add, adding_2_with_1_left, 2, 1);
-                ids_run_out_proofs!(@case $add, adding_2_with_2_left, 2, 2);
-            }
-        )*
+    ($($check:ident $(with $solver:ident)?),* $(,)?) => {
+        mod when_ids_run_out {
+            $(
+                mod $check {
+                    ids_run_out_proofs!(@case $check, adding_1_with_0_left, 1, 0 $(, $solver)?);
+                    ids_run_out_proofs!(@case $check, adding_1_with_1_left, 1, 1 $(, $solver)?);
+                    ids_run_out_proofs!(@case $check, adding_2_with_0_left, 2, 0 $(, $solver)?);
+                    ids_run_out_proofs!(@case $check, adding_2_with_1_left, 2, 1 $(, $solver)?);
+                    ids_run_out_proofs!(@case $check, adding_2_with_2_left, 2, 2 $(, $solver)?);
+                }
+            )*
+        }
     };
-    (@case $add:expr, $name:ident, $added:literal, $left:literal) => {
+    (@case $check:ident, $name:ident, $added:literal, $left:literal $(, $solver:ident)?) => {
         mod $name {
-            use super::*;
-
             #[kani::proof]
             #[kani::unwind(6)]
+            $(#[kani::solver($solver)])?
             fn from_0_entries() {
-                ids_run_out::<$added, $left>(0, $add);
+                super::super::super::$check::<$added>(0, u64::MAX - $left);
             }
 
             #[kani::proof]
             #[kani::unwind(6)]
+            $(#[kani::solver($solver)])?
             fn from_1_entry() {
-                ids_run_out::<$added, $left>(1, $add);
+                super::super::super::$check::<$added>(1, u64::MAX - $left);
             }
 
             #[kani::proof]
             #[kani::unwind(6)]
+            $(#[kani::solver($solver)])?
             fn from_2_entries() {
-                ids_run_out::<$added, $left>(2, $add);
+                super::super::super::$check::<$added>(2, u64::MAX - $left);
             }
 
             #[kani::proof]
             #[kani::unwind(6)]
+            $(#[kani::solver($solver)])?
             fn from_3_entries() {
-                ids_run_out::<$added, $left>(3, $add);
+                super::super::super::$check::<$added>(3, u64::MAX - $left);
             }
         }
     };
 }
 
-ids_run_out_proofs!(
-    replace_when_ids_run_out: |queue: &mut Queue<u8>, media| queue.replace(QueueSource::Selection, media, None),
-    play_next_when_ids_run_out: |queue: &mut Queue<u8>, media| queue.play_next(media),
-    append_when_ids_run_out: |queue: &mut Queue<u8>, media| queue.append(media, Origin::Manual),
-);
+ids_run_out_proofs!(replace, play_next_in_order, play_next_shuffled with minisat, append);
