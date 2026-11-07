@@ -177,3 +177,17 @@ jobs:
         run: cargo install wasm-tools --version 1.263.0 --locked --no-default-features --features component
       - name: Parse the contract
         run: wasm-tools component wit wit/ > /dev/null
+
+  # Spelling mistakes in code, comments and docs; everything in the repository is in English.
+  typos:
+    name: typos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Install typos
+        run: cargo install typos-cli --version 1.52.0 --locked
+      - name: Spell check
+        run: typos
