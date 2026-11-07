@@ -1,8 +1,8 @@
-//! Capability calls and their failures (docs/plugin-host-spec.md, sections 3, 6 and 7).
+//! Capability calls, their failures and their reports (docs/plugin-host-spec.md, sections 3, 6, 7 and 9).
 //!
 //! Each call gets a fresh store and a fresh instance with its own budgets, and both are dropped when it returns, so
-//! nothing a plugin keeps in its memory survives to the next call. The host reports the outcome and never retries.
-//! Requests go through the HTTP sandbox of `host.rs` (section 5).
+//! nothing a plugin keeps in its memory survives to the next call. The host reports the outcome and what the call
+//! used, and never retries. Requests go through the HTTP sandbox of `host.rs` (section 5).
 
 use std::time::Duration;
 
@@ -11,7 +11,7 @@ use thiserror::Error;
 use crate::bindings::base::vehicoule::plugin::types;
 use crate::bindings::search::SearchPluginPre;
 use crate::media::{OutputSize, output_bytes};
-use crate::{ByteSize, Capability, InstalledPlugin, ItemKind, Page, PluginHost};
+use crate::{ByteSize, Capability, Fuel, InstalledPlugin, ItemKind, Page, PluginHost};
 
 /// An error the plugin itself returned, as the contract names them.
 #[non_exhaustive]
@@ -83,63 +83,124 @@ pub enum PluginFailure {
     Runtime(String),
 }
 
+/// What one call used, whether it returned a value or failed (section 7), for the budgets' measurements
+/// (section 9).
+///
+/// A call that never ran, because the plugin does not provide the capability, reports nothing used.
+///
+/// ```
+/// use vehicoule_plugin_host::CallReport;
+///
+/// let report = CallReport::default();
+/// assert_eq!(report.requests_sent, 0);
+/// assert_eq!(report.output, None);
+/// ```
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CallReport {
+    /// The fuel the call consumed: all of it when it ran out.
+    pub fuel_used: Fuel,
+    /// The most bytes its memories and tables held together, as the memory ceiling counts them.
+    pub memory_peak: ByteSize,
+    /// The requests it sent to the network.
+    pub requests_sent: u32,
+    /// The requests the sandbox refused; they never reached the network (section 5).
+    pub requests_refused: u32,
+    /// The size of what the plugin returned, a value or its own error, as the output budget counts it; `None` when
+    /// it returned nothing.
+    pub output: Option<ByteSize>,
+}
+
+impl Default for CallReport {
+    fn default() -> Self {
+        Self {
+            fuel_used: Fuel::new(0),
+            memory_peak: ByteSize::new(0),
+            requests_sent: 0,
+            requests_refused: 0,
+            output: None,
+        }
+    }
+}
+
+/// A call's outcome with its report.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Reported<T> {
+    /// The plugin's value, or why there is none.
+    pub outcome: Result<T, PluginFailure>,
+    /// What the call used.
+    pub report: CallReport,
+}
+
 impl PluginHost {
     /// One page of results for `query`, of the given kinds, from `cursor` (a `next` of an earlier page) or from the
     /// start.
     ///
     /// # Errors
     ///
-    /// A [`PluginFailure`]: the plugin's own error, a budget exceeded, a trap, or a plugin that does not provide
-    /// search.
+    /// The outcome is a [`PluginFailure`] when the plugin returned its own error, went over a budget or trapped, or
+    /// does not provide search.
+    #[must_use]
     pub fn search(
         &self,
         plugin: &InstalledPlugin,
         query: &str,
         kinds: &[ItemKind],
         cursor: Option<&str>,
-    ) -> Result<Page, PluginFailure> {
+    ) -> Reported<Page> {
         let kinds: Vec<types::ItemKind> = kinds.iter().copied().map(Into::into).collect();
-        let answer = self.call(plugin, Capability::Search, |store, pre| {
+        let (answer, report) = self.call(plugin, Capability::Search, |store, pre| {
             let instance = SearchPluginPre::new(pre.clone())?.instantiate(&mut *store)?;
             instance
                 .vehicoule_plugin_search()
                 .call_search(store, query, &kinds, cursor)
-        })?;
-        self.bounded(answer.map(Page::from))
+        });
+        self.bounded(answer.map(|answer| answer.map(Page::from)), report)
     }
 
     /// Completions of what the user is typing, in the plugin's order.
     ///
-    /// # Errors
-    ///
-    /// A [`PluginFailure`], as for [`PluginHost::search`].
-    pub fn suggest(
-        &self,
-        plugin: &InstalledPlugin,
-        prefix: &str,
-    ) -> Result<Vec<String>, PluginFailure> {
-        let answer = self.call(plugin, Capability::Search, |store, pre| {
+    /// The outcome is a [`PluginFailure`] as for [`PluginHost::search`].
+    #[must_use]
+    pub fn suggest(&self, plugin: &InstalledPlugin, prefix: &str) -> Reported<Vec<String>> {
+        let (answer, report) = self.call(plugin, Capability::Search, |store, pre| {
             let instance = SearchPluginPre::new(pre.clone())?.instantiate(&mut *store)?;
             instance
                 .vehicoule_plugin_search()
                 .call_suggest(store, prefix)
-        })?;
-        self.bounded(answer)
+        });
+        self.bounded(answer, report)
     }
 
-    /// The plugin's answer, or the failure it names, once its size is checked against the output budget. A plugin
-    /// error's text counts too: it is output like any other.
-    fn bounded<T: OutputSize>(&self, answer: Result<T, types::Error>) -> Result<T, PluginFailure> {
-        let answer = answer.map_err(PluginError::from);
+    /// The plugin's answer, or the failure it names, once its size is checked against the output budget and written
+    /// in the report. A plugin error's text counts too: it is output like any other.
+    fn bounded<T: OutputSize>(
+        &self,
+        answer: Result<Result<T, types::Error>, PluginFailure>,
+        mut report: CallReport,
+    ) -> Reported<T> {
+        let answer = match answer {
+            Ok(answer) => answer.map_err(PluginError::from),
+            Err(failure) => {
+                return Reported {
+                    outcome: Err(failure),
+                    report,
+                };
+            }
+        };
         let size = match &answer {
             Ok(value) => output_bytes(value),
             Err(error) => output_bytes(error),
         };
+        report.output = Some(size);
         let limit = self.config().max_output;
-        if size > limit {
-            return Err(PluginFailure::OutputTooLarge { size, limit });
-        }
-        answer.map_err(PluginFailure::Plugin)
+        let outcome = if size > limit {
+            Err(PluginFailure::OutputTooLarge { size, limit })
+        } else {
+            answer.map_err(PluginFailure::Plugin)
+        };
+        Reported { outcome, report }
     }
 }
 

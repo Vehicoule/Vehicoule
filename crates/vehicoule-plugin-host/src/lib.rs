@@ -10,8 +10,8 @@
 //! and capabilities matched against exports
 //! ([spec](https://github.com/Vehicoule/Vehicoule/blob/main/docs/plugin-host-spec.md), sections 3 to 5). It calls
 //! the search capability in a fresh store per call, with fuel, memory and output budgets (sections 3, 6 and 7), and
-//! gives plugins the network through a sandbox with its own budgets (sections 5 and 6). Wall time and the other
-//! capabilities come next.
+//! gives plugins the network through a sandbox with its own budgets (sections 5 and 6). Each call returns a report of
+//! what it used (section 7). The other capabilities come next.
 
 mod bindings;
 mod call;
@@ -23,7 +23,7 @@ mod network;
 #[cfg(kani)]
 mod proof_input;
 
-pub use call::{PluginError, PluginFailure};
+pub use call::{CallReport, PluginError, PluginFailure, Reported};
 pub use config::{ByteSize, Fuel, HostConfig, HttpBudget, Ticks};
 pub use host::{HostError, InstallError, InstalledPlugin, PluginHost, Ticker};
 pub use manifest::{Capability, Domain, HostPattern, Manifest, ManifestError, PluginId};

@@ -8,12 +8,12 @@ mod common;
 use std::time::Duration;
 
 use common::{
-    FakeNetwork, MAX_OUTPUT, MAX_REQUESTS, MAX_RESPONSE_BODY, REQUEST_DEADLINE, fixture, host,
-    host_on, host_ticking,
+    FUEL, FakeNetwork, MAX_MEMORY, MAX_OUTPUT, MAX_REQUESTS, MAX_RESPONSE_BODY, REQUEST_DEADLINE,
+    fixture, host, host_on, host_ticking,
 };
 use vehicoule_plugin_host::{
-    ByteSize, Capability, HttpResponse, InstalledPlugin, Item, ItemKind, Method, NetworkError,
-    PluginError, PluginFailure, PluginHost,
+    ByteSize, CallReport, Capability, Fuel, HttpResponse, InstalledPlugin, Item, ItemKind, Method,
+    NetworkError, PluginError, PluginFailure, PluginHost,
 };
 
 /// A host with the `good` plugin installed; an error says which step failed, and the calling test unwraps it.
@@ -33,6 +33,7 @@ fn a_search_returns_one_item_per_requested_kind_with_every_field() {
             &[ItemKind::Track, ItemKind::Album, ItemKind::Artist],
             None,
         )
+        .outcome
         .unwrap();
     assert_eq!(page.next.as_deref(), Some("page-2"));
     assert_eq!(page.items.len(), 3);
@@ -82,6 +83,7 @@ fn the_cursor_and_the_kinds_reach_the_plugin() {
     let (host, plugin) = good().unwrap();
     let page = host
         .search(&plugin, "daft", &[ItemKind::Playlist], Some("page-2"))
+        .outcome
         .unwrap();
     // The plugin answers `next` = cursor + "+": it saw the cursor.
     assert_eq!(page.next.as_deref(), Some("page-2+"));
@@ -91,7 +93,7 @@ fn the_cursor_and_the_kinds_reach_the_plugin() {
         "{:?}",
         page.items
     );
-    let empty = host.search(&plugin, "daft", &[], None).unwrap();
+    let empty = host.search(&plugin, "daft", &[], None).outcome.unwrap();
     assert!(empty.items.is_empty(), "{:?}", empty.items);
 }
 
@@ -99,7 +101,7 @@ fn the_cursor_and_the_kinds_reach_the_plugin() {
 fn suggestions_come_back_in_the_plugin_order() {
     let (host, plugin) = good().unwrap();
     assert_eq!(
-        host.suggest(&plugin, "daft").unwrap(),
+        host.suggest(&plugin, "daft").outcome.unwrap(),
         ["daft live", "daft remix"]
     );
 }
@@ -128,6 +130,7 @@ fn each_error_of_the_plugin_comes_back_as_itself() {
     for (query, expected) in cases {
         let failure = host
             .search(&plugin, query, &[ItemKind::Track], None)
+            .outcome
             .unwrap_err();
         assert_eq!(failure, PluginFailure::Plugin(expected), "{query}");
     }
@@ -136,24 +139,25 @@ fn each_error_of_the_plugin_comes_back_as_itself() {
 #[test]
 fn an_endless_call_is_stopped_by_fuel() {
     let (host, plugin) = good().unwrap();
-    let failure = host.search(&plugin, "loop", &[], None).unwrap_err();
+    let failure = host.search(&plugin, "loop", &[], None).outcome.unwrap_err();
     assert_eq!(failure, PluginFailure::FuelExhausted);
 }
 
 #[test]
 fn a_call_that_grows_memory_without_bound_is_stopped_at_the_ceiling() {
     let (host, plugin) = good().unwrap();
-    let failure = host.search(&plugin, "grow", &[], None).unwrap_err();
+    let failure = host.search(&plugin, "grow", &[], None).outcome.unwrap_err();
     assert_eq!(failure, PluginFailure::MemoryLimit);
 }
 
 #[test]
 fn a_trap_fails_the_call_and_the_next_call_works() {
     let (host, plugin) = good().unwrap();
-    let failure = host.search(&plugin, "trap", &[], None).unwrap_err();
+    let failure = host.search(&plugin, "trap", &[], None).outcome.unwrap_err();
     assert!(matches!(failure, PluginFailure::Trap(_)), "{failure:?}");
     let page = host
         .search(&plugin, "after", &[ItemKind::Track], None)
+        .outcome
         .unwrap();
     assert!(
         matches!(&page.items[..], [Item::Track(t)] if t.title == "after"),
@@ -166,10 +170,11 @@ fn a_trap_fails_the_call_and_the_next_call_works() {
 fn every_budget_is_whole_again_on_the_next_call() {
     // A call that spent all its fuel or memory leaves the next call its full budget.
     let (host, plugin) = good().unwrap();
-    assert!(host.search(&plugin, "loop", &[], None).is_err());
-    assert!(host.search(&plugin, "grow", &[], None).is_err());
+    assert!(host.search(&plugin, "loop", &[], None).outcome.is_err());
+    assert!(host.search(&plugin, "grow", &[], None).outcome.is_err());
     assert!(
         host.search(&plugin, "daft", &[ItemKind::Track], None)
+            .outcome
             .is_ok()
     );
 }
@@ -179,7 +184,7 @@ fn nothing_a_plugin_keeps_in_memory_survives_to_the_next_call() {
     // The plugin counts its calls in a static: in a fresh instance per call, it always counts one.
     let (host, plugin) = good().unwrap();
     for _ in 0..3 {
-        let page = host.search(&plugin, "count", &[], None).unwrap();
+        let page = host.search(&plugin, "count", &[], None).outcome.unwrap();
         assert!(
             matches!(&page.items[..], [Item::Track(t)] if t.title == "1"),
             "{:?}",
@@ -199,6 +204,7 @@ fn an_answer_exactly_at_the_output_ceiling_is_returned() {
     let title = MAX_OUTPUT - BIG_OVERHEAD;
     let page = host
         .search(&plugin, &format!("big:{title}"), &[], None)
+        .outcome
         .unwrap();
     assert!(
         matches!(&page.items[..], [Item::Track(t)] if t.title.len() == usize::try_from(title).unwrap()),
@@ -212,6 +218,7 @@ fn an_answer_over_the_output_ceiling_is_refused() {
     let title = MAX_OUTPUT - BIG_OVERHEAD + 1;
     let failure = host
         .search(&plugin, &format!("big:{title}"), &[], None)
+        .outcome
         .unwrap_err();
     assert_eq!(
         failure,
@@ -231,11 +238,12 @@ fn a_plugin_that_does_not_provide_search_is_not_called_for_it() {
         .unwrap();
     assert_eq!(
         host.search(&plugin, "daft", &[ItemKind::Track], None)
+            .outcome
             .unwrap_err(),
         PluginFailure::NotProvided(Capability::Search)
     );
     assert_eq!(
-        host.suggest(&plugin, "daft").unwrap_err(),
+        host.suggest(&plugin, "daft").outcome.unwrap_err(),
         PluginFailure::NotProvided(Capability::Search)
     );
 }
@@ -247,10 +255,12 @@ fn a_long_list_of_empty_items_counts_toward_the_output_ceiling() {
     let fits = MAX_OUTPUT - 6;
     let page = host
         .search(&plugin, &format!("empty:{fits}"), &[], None)
+        .outcome
         .unwrap();
     assert_eq!(page.items.len(), usize::try_from(fits).unwrap());
     let failure = host
         .search(&plugin, &format!("empty:{}", fits + 1), &[], None)
+        .outcome
         .unwrap_err();
     assert_eq!(
         failure,
@@ -277,7 +287,7 @@ fn answer(
     plugin: &InstalledPlugin,
     query: &str,
 ) -> Result<String, PluginFailure> {
-    let page = host.search(plugin, query, &[], None)?;
+    let page = host.search(plugin, query, &[], None).outcome?;
     match page.items.as_slice() {
         [Item::Track(track)] => Ok(track.title.clone()),
         other => Err(PluginFailure::Runtime(format!(
@@ -555,10 +565,128 @@ fn a_call_after_a_wall_time_stop_gets_its_whole_wall_time() {
     );
     let page = host
         .search(&plugin, "after", &[ItemKind::Track], None)
+        .outcome
         .unwrap();
     assert!(
         matches!(&page.items[..], [Item::Track(t)] if t.title == "after"),
         "{:?}",
         page.items
     );
+}
+
+// The call's report (docs/plugin-host-spec.md, sections 7 and 9): what each call used, whether it returned or failed.
+
+#[test]
+fn a_call_reports_the_requests_it_sent_and_the_ones_the_sandbox_refused() {
+    let network = common::ok_network();
+    let (host, plugin) = good_on(&network).unwrap();
+    let sent = host.search(&plugin, "fetch:2:https://api.example.org/", &[], None);
+    assert!(sent.outcome.is_ok(), "{:?}", sent.outcome);
+    assert_eq!(sent.report.requests_sent, 2);
+    assert_eq!(sent.report.requests_refused, 0);
+    let refused = host.search(&plugin, "fetch:3:https://evil.org/", &[], None);
+    assert!(refused.outcome.is_ok(), "{:?}", refused.outcome);
+    assert_eq!(refused.report.requests_sent, 0);
+    assert_eq!(refused.report.requests_refused, 3);
+    let header = host.search(&plugin, "header:Host:https://api.example.org/", &[], None);
+    assert_eq!(header.report.requests_refused, 1);
+    assert_eq!(network.requests().len(), 2);
+}
+
+#[test]
+fn a_call_ended_by_its_request_budget_reports_what_it_sent_and_no_output() {
+    let network = common::ok_network();
+    let (host, plugin) = good_on(&network).unwrap();
+    let over = host.search(
+        &plugin,
+        &format!("fetch:{}:https://api.example.org/", MAX_REQUESTS + 1),
+        &[],
+        None,
+    );
+    assert_eq!(over.outcome, Err(PluginFailure::TooManyRequests));
+    // The request over the budget never left, so it is neither sent nor refused: the failure names it.
+    assert_eq!(over.report.requests_sent, MAX_REQUESTS);
+    assert_eq!(over.report.requests_refused, 0);
+    assert_eq!(over.report.output, None);
+}
+
+#[test]
+fn the_fuel_a_call_used_is_reported_the_same_on_every_run_and_grows_with_the_work() {
+    let (host, plugin) = good().unwrap();
+    let small = host.search(&plugin, "empty:10", &[], None).report.fuel_used;
+    assert_eq!(
+        host.search(&plugin, "empty:10", &[], None).report.fuel_used,
+        small
+    );
+    let large = host
+        .search(&plugin, "empty:1000", &[], None)
+        .report
+        .fuel_used;
+    assert!(
+        Fuel::new(0) < small && small < large && large < Fuel::new(FUEL),
+        "{small:?} {large:?}"
+    );
+    let endless = host.search(&plugin, "loop", &[], None);
+    assert_eq!(endless.outcome, Err(PluginFailure::FuelExhausted));
+    assert_eq!(endless.report.fuel_used, Fuel::new(FUEL));
+}
+
+#[test]
+fn the_memory_peak_is_reported_and_never_over_the_ceiling() {
+    let (host, plugin) = good().unwrap();
+    let small = host
+        .search(&plugin, "daft", &[ItemKind::Track], None)
+        .report
+        .memory_peak;
+    let grow = host.search(&plugin, "grow", &[], None);
+    assert_eq!(grow.outcome, Err(PluginFailure::MemoryLimit));
+    let peak = grow.report.memory_peak;
+    assert!(
+        ByteSize::new(0) < small && small < peak && peak <= ByteSize::new(MAX_MEMORY),
+        "{small:?} {peak:?}"
+    );
+}
+
+#[test]
+fn the_output_size_is_reported_for_a_value_an_error_or_an_answer_over_the_ceiling() {
+    let (host, plugin) = good().unwrap();
+    let at = host.search(
+        &plugin,
+        &format!("big:{}", MAX_OUTPUT - BIG_OVERHEAD),
+        &[],
+        None,
+    );
+    assert!(at.outcome.is_ok());
+    assert_eq!(at.report.output, Some(ByteSize::new(MAX_OUTPUT)));
+    let over = host.search(
+        &plugin,
+        &format!("big:{}", MAX_OUTPUT - BIG_OVERHEAD + 1),
+        &[],
+        None,
+    );
+    assert!(matches!(
+        over.outcome,
+        Err(PluginFailure::OutputTooLarge { .. })
+    ));
+    assert_eq!(over.report.output, Some(ByteSize::new(MAX_OUTPUT + 1)));
+    // `service down` is 12 bytes.
+    let error = host.search(&plugin, "error:upstream", &[], None);
+    assert_eq!(error.report.output, Some(ByteSize::new(12)));
+    let trap = host.search(&plugin, "trap", &[], None);
+    assert!(matches!(trap.outcome, Err(PluginFailure::Trap(_))));
+    assert_eq!(trap.report.output, None);
+}
+
+#[test]
+fn a_call_to_a_capability_the_plugin_does_not_provide_reports_nothing_used() {
+    let host = host().unwrap();
+    let plugin = host
+        .install(&fixture("fetch-in-describe").unwrap())
+        .unwrap();
+    let call = host.suggest(&plugin, "daft");
+    assert_eq!(
+        call.outcome,
+        Err(PluginFailure::NotProvided(Capability::Search))
+    );
+    assert_eq!(call.report, CallReport::default());
 }
