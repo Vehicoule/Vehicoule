@@ -10,8 +10,11 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request cancels its run on the older commit, which nobody needs any more. Each run on `main`
+# has a group of its own, so a merge never cancels the run of the merge before it: every commit on `main` is
+# checked, and its caches are saved.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 env:
