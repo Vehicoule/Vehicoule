@@ -26,6 +26,7 @@ site may describe a newer version than the one this repository builds against.
 | Spell check | https://github.com/crate-ci/typos | `typos-cli` `1.52.0`, installed by CI (`.github/workflows/ci.yml`) |
 | Unused dependencies | https://github.com/bnjbvr/cargo-machete | `0.9.2`, installed by CI (`.github/workflows/ci.yml`) |
 | Workflow audit | https://docs.zizmor.sh | `zizmor` `1.32.0`, installed by CI (`.github/workflows/ci.yml`) |
+| Fuzzing | https://rust-fuzz.github.io/book/cargo-fuzz.html | `cargo-fuzz` `0.13.2`, installed by CI; `libfuzzer-sys` `0.4.13`; toolchain `nightly-2026-11-01`, in [`crates/vehicoule-plugin-host/fuzz/rust-toolchain.toml`](../crates/vehicoule-plugin-host/fuzz/rust-toolchain.toml) ([ADR 0013](adr/0013-fuzz-the-plugin-hosts-untrusted-inputs.md)) |
 
 ## NSH and the component library
 

@@ -1,0 +1,42 @@
+# Fuzz targets for the plugin host's untrusted inputs (ADR 0013), run with cargo-fuzz on the nightly toolchain that
+# `rust-toolchain.toml` in this directory pins.
+# Its own workspace: it needs nightly and libFuzzer, is never shipped, and must not join the app's dependency graph.
+[workspace]
+
+[package]
+name = "vehicoule-plugin-host-fuzz"
+description = "Fuzz targets for the plugin host: plugin bytes, manifests and host patterns"
+version = "0.0.0"
+edition = "2024"
+license = "GPL-3.0-only"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+# libFuzzer's runtime, which is C++, and the `fuzz_target!` entry point. The user agreed to this C++ dependency on
+# 2026-11-07, for fuzzing only (ADR 0013).
+libfuzzer-sys = "=0.4.13"
+vehicoule-plugin-host = { path = "..", version = "0.0.0" }
+
+[[bin]]
+name = "install"
+path = "fuzz_targets/install.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "manifest"
+path = "fuzz_targets/manifest.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "host_pattern"
+path = "fuzz_targets/host_pattern.rs"
+test = false
+doc = false
+bench = false
