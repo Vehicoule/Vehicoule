@@ -170,7 +170,9 @@ Answered by the user on 2026-11-06:
 3. **No WASI**: left to Claude; taken: plugins get only the contract's `http` and `log`.
 4. **First music plugin**: `ytmusic`, in `vehicoule-plugins-extra`. The published plugins are `deezer`, `itunes`,
    `lrclib` and `ytmusic`; only `ytmusic` resolves a full track to a stream, so it is the only one that tests the
-   whole chain (search, resolve, play, radio). The three others give metadata, artwork and lyrics.
+   whole chain (resolve, play, radio). The three others give search, metadata, artwork and lyrics; which plugin
+   provides which capability, and in which default order, is in [plugin providers](plugin-providers.md), decided by
+   the user later on 2026-11-06.
 
 ## 11. Order of the work
 
