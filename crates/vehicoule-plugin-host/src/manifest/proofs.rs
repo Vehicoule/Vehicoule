@@ -44,8 +44,8 @@ fn an_exact_pattern_matches_its_name_and_nothing_else() {
     );
 }
 
-/// `*.d` matches only a host that ends, in any case, with a dot and `d`, with at least one label before; never `d`
-/// itself; and it matches `a.d`. Names up to 4 bytes, hosts up to 8.
+/// `*.d` matches only a host that ends, in any case, with a dot and `d`, with one or more valid labels before; never
+/// `d` itself; and it matches `a.d`. Names up to 4 bytes, hosts up to 8.
 #[kani::proof]
 #[kani::unwind(10)]
 fn a_subdomain_pattern_matches_subdomains_only() {
@@ -59,11 +59,18 @@ fn a_subdomain_pattern_matches_subdomains_only() {
         let (front, back) = host.split_at(host.len() - name.len());
         assert!(back.eq_ignore_ascii_case(name));
         assert_eq!(front.last(), Some(&b'.'));
+        // `front` is labels and a dot: each label non-empty, of letters, digits and `-`, neither starting nor ending
+        // with `-`. A label over 63 bytes cannot fit in 8.
         assert!(front[0] != b'.' && front[0] != b'-');
         assert!(
             front
                 .iter()
                 .all(|b| b.is_ascii_alphanumeric() || *b == b'.' || *b == b'-')
+        );
+        assert!(
+            !front
+                .windows(2)
+                .any(|w| matches!(w, [b'.', b'.' | b'-'] | [b'-', b'.']))
         );
     }
     assert!(!pattern_matches(name, true, name));

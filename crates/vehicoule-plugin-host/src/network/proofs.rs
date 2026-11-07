@@ -43,8 +43,8 @@ fn a_url_is_kept_only_with_a_clean_host() {
 }
 
 /// An accepted header has a non-empty name of token bytes (no `:`, space, CR, LF or NUL) that is not `host` in any
-/// case, and a value without CR, LF, NUL, DEL or a C1 control; `host` in any case is refused as such. Names up to 6
-/// bytes, values up to 4.
+/// case, and a value without a C0 control but tab, nor DEL, nor a C1 control; `host` in any case is refused as such.
+/// Names up to 6 bytes, values up to 4.
 #[kani::proof]
 #[kani::unwind(18)]
 fn an_accepted_header_can_neither_inject_a_line_nor_name_a_host() {
@@ -63,7 +63,11 @@ fn an_accepted_header_can_neither_inject_a_line_nor_name_a_host() {
             name.iter()
                 .all(|b| b.is_ascii_graphic() && !b":()<>@,;\\\"/[]?={}".contains(b))
         );
-        assert!(value.iter().all(|b| !matches!(b, b'\r' | b'\n' | 0 | 0x7f)));
+        assert!(
+            value
+                .iter()
+                .all(|b| *b == b'\t' || (*b >= 0x20 && *b != 0x7f))
+        );
         assert!(
             !value
                 .windows(2)
