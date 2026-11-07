@@ -78,11 +78,12 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
 cargo deny check
 cargo mutants --workspace --cargo-arg=--locked   # cargo-mutants 27.1.0
 wasm-tools component wit wit/ > /dev/null       # wasm-tools 1.263.0, the plugin contract parses
+cargo kani --workspace                           # Kani 0.68.0, after `cargo kani setup`
 ```
 
-Kani joins this list with the first proof harness ([ADR 0004](docs/adr/0004-verification.md)). The toolchain is pinned
-in [`rust-toolchain.toml`](rust-toolchain.toml). Run the full list before opening a pull request, and report what you
-ran.
+Kani proofs live in `#[cfg(kani)]` modules beside the code they prove ([ADR 0004](docs/adr/0004-verification.md)). The
+toolchain is pinned in [`rust-toolchain.toml`](rust-toolchain.toml). Run the full list before opening a pull request,
+and report what you ran.
 
 ## Layout
 
