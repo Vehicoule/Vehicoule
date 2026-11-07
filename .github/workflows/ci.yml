@@ -299,16 +299,14 @@ jobs:
         working-directory: crates/vehicoule-core/fuzz
         run: cargo fuzz run queue -- -seed=1 -runs=200000
 
-  # ADR 0016: the core's benchmarks count instructions under Callgrind, which does not depend on the runner's load,
-  # and each one fails above its ceiling. Valgrind is pinned to the version the counts were recorded with: the install
-  # fails when the image no longer offers it, rather than counting with another one.
-  # The first run of its 19 benchmarks took 6 s after the build, and the job 1.5 min with the installs.
+  # ADR 0016: the benchmarks of the core and of the plugin host count instructions under Callgrind, which does not
+  # depend on the runner's load, and each one fails above its ceiling. Valgrind is pinned to the version the counts
+  # were recorded with: the install fails when the image no longer offers it, rather than counting with another one.
+  # The core's 23 benchmarks took 7 s in CI after the build, and the job 2 min with the installs. The plugin host's
+  # install benchmark takes 15 s locally (Valgrind 3.22.0, one run).
   bench:
     name: bench
     runs-on: ubuntu-24.04
-    defaults:
-      run:
-        working-directory: crates/vehicoule-core/bench
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -317,19 +315,35 @@ jobs:
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          workspaces: crates/vehicoule-core/bench -> target
+          workspaces: |
+            crates/vehicoule-core/bench -> target
+            crates/vehicoule-plugin-host/fixtures -> target
+            crates/vehicoule-plugin-host/bench -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Install Valgrind and gungraun-runner
+      - name: Install Valgrind, gungraun-runner and wasm-tools
         run: |
           sudo apt-get update
           sudo apt-get install -y valgrind=1:3.22.0-0ubuntu3
           test "$(valgrind --version)" = valgrind-3.22.0
           cargo install gungraun-runner --version 0.20.0 --locked
+          cargo install wasm-tools --version 1.263.0 --locked --no-default-features --features component
+      - name: Build the plugin host's test plugins
+        run: scripts/build-plugin-fixtures.sh "$RUNNER_TEMP/plugin-fixtures"
       - name: Format
-        run: cargo fmt --check
+        run: |
+          (cd crates/vehicoule-core/bench && cargo fmt --check)
+          (cd crates/vehicoule-plugin-host/bench && cargo fmt --check)
       - name: Clippy
-        run: cargo clippy --all-targets --locked -- -D warnings
-      - name: Run the benchmarks
+        run: |
+          (cd crates/vehicoule-core/bench && cargo clippy --all-targets --locked -- -D warnings)
+          (cd crates/vehicoule-plugin-host/bench && cargo clippy --all-targets --locked -- -D warnings)
+      - name: Run the core's benchmarks
+        working-directory: crates/vehicoule-core/bench
+        run: cargo bench --locked
+      - name: Run the plugin host's benchmarks
+        working-directory: crates/vehicoule-plugin-host/bench
+        env:
+          VEHICOULE_PLUGIN_FIXTURES: ${{ runner.temp }}/plugin-fixtures
         run: cargo bench --locked
 
   deny:
@@ -356,6 +370,10 @@ jobs:
         with:
           command: check
           manifest-path: crates/vehicoule-core/bench/Cargo.toml
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check
+          manifest-path: crates/vehicoule-plugin-host/bench/Cargo.toml
 
   # The plugin contract (docs/plugin-host-spec.md, section 8) must parse as a WIT package.
   wit:
