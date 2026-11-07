@@ -167,14 +167,15 @@ Commands: `Resolve { entry, request }`, `Load { source, from }`, `Play`, `Pause`
 | `Playing { e, .. }` or `Buffering { e, .. }` | `Seek { p }` | `Buffering { e, p, d }` | `Seek { p }` |
 | `Paused { e, .. }` | `Seek { p }` | `Paused { e, p, d }` | `Seek { p }` |
 | `Stopped { e, .. }` | `Seek { p }` | `Stopped { e, p }` | |
-| any with an entry, but `Stopped` | `Stop` | `Stopped { e, position }` | `Stop` when a source was loaded |
+| `Resolving`, `Loading`, `Playing`, `Paused` or `Buffering`, on `e` | `Stop` | `Stopped { e, position }` | `Stop` when a source was loaded |
 | `Stopped { e, p }` | `Resume` | `Resolving { e, p, r }` | `Resolve { e, r }` |
 | `Playing { e, .. }` or `Buffering { e, .. }` | `Ended { e }` | see below | |
 
 - `r` is a new request number, different from every request still in flight. `d` is the duration the state had,
   carried along. `a at now` is the anchor's position at `now`, clamped to `d` (Position, below).
   `position` in `Stop` is the position of the state left: `a at now` from `Playing`, the kept position from `Paused`
-  and `Buffering`, `from` from `Resolving` and `Loading`.
+  and `Buffering`, `from` from `Resolving` and `Loading`. `Stop` in `WaitingForNetwork`, which keeps no position, comes
+  with that state's pull request.
 - `Buffering` is also where the player waits after `Resume` and `Seek`, until the platform reports `Playing`: section 5
   gives it its deadline.
 - `Ended { e }`: the session advances its queue as an entry that ended by itself (`Advance::Finished`). The player
