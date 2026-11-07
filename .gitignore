@@ -11,3 +11,5 @@ mutants.out*/
 /crates/vehicoule-core/fuzz/corpus
 /crates/vehicoule-core/fuzz/artifacts
 /crates/vehicoule-core/fuzz/coverage
+# What the core's benchmarks build and measure (ADR 0016).
+/crates/vehicoule-core/bench/target
