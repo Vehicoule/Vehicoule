@@ -222,7 +222,11 @@ fn step(
             let position = u.int_in_range(0..=queue.len())?;
             match queue.move_to(id, position) {
                 Ok(()) => {
-                    assert_eq!(play_ids(queue).get(position), Some(&id));
+                    // Only `id` moves: the play order is the old one with `id` taken out and put back at `position`.
+                    let mut expected = play_ids(&before);
+                    expected.retain(|other| *other != id);
+                    expected.insert(position, id);
+                    assert_eq!(play_ids(queue), expected);
                     assert_eq!(sorted(ids(queue)), sorted(before_ids.clone()));
                     if queue.is_shuffled() {
                         assert_eq!(
