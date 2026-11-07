@@ -74,7 +74,7 @@ The same commands run in CI ([`.github/workflows/ci.yml`](.github/workflows/ci.y
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --locked
 cargo deny check
 cargo mutants --workspace --cargo-arg=--locked   # cargo-mutants 27.1.0
 wasm-tools component wit wit/ > /dev/null       # wasm-tools 1.263.0, the plugin contract parses

@@ -53,7 +53,7 @@ jobs:
         env:
           VEHICOULE_PLUGIN_FIXTURES: ${{ runner.temp }}/plugin-fixtures
       - name: Docs
-        run: cargo doc --workspace --no-deps --locked
+        run: cargo doc --workspace --no-deps --document-private-items --locked
         env:
           RUSTDOCFLAGS: -D warnings
 
