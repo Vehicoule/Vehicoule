@@ -33,7 +33,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install the pinned toolchain
         run: rustup toolchain install
+      # Only `main` saves: pull requests read its entries and cannot share theirs, so their saves only took space from
+      # `main`'s under the repository's cache limit.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install wasm-tools
         run: cargo install wasm-tools --version 1.263.0 --locked --no-default-features --features component
       - name: Build the plugin host's test plugins
@@ -71,6 +75,8 @@ jobs:
       - name: Install the pinned toolchain
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install cargo-mutants
         run: cargo install cargo-mutants --version 27.1.0 --locked
       - name: Install wasm-tools
@@ -114,6 +120,8 @@ jobs:
       - name: Install the pinned toolchain
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install Kani
         # `cargo kani setup` downloads the CBMC bundle and the nightly toolchain that this Kani version is built for.
         run: |
@@ -179,6 +187,8 @@ jobs:
       - name: Install the pinned toolchain
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install wasm-tools
         run: cargo install wasm-tools --version 1.263.0 --locked --no-default-features --features component
       - name: Parse the contract
@@ -193,6 +203,8 @@ jobs:
       - name: Install the pinned toolchain
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install typos
         run: cargo install typos-cli --version 1.52.0 --locked
       - name: Spell check
@@ -207,6 +219,8 @@ jobs:
       - name: Install the pinned toolchain
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install cargo-machete
         run: cargo install cargo-machete --version 0.9.2 --locked
       - name: Find unused dependencies
