@@ -311,6 +311,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The parent commit holds the contract this one is checked against.
+          fetch-depth: 2
       - name: Install the pinned toolchain
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -320,6 +322,15 @@ jobs:
         run: cargo install wasm-tools --version 1.263.0 --locked --no-default-features --features component
       - name: Parse the contract
         run: wasm-tools component wit wit/ > /dev/null
+      - name: Test the compatibility check
+        run: scripts/test-check-wit-compat.sh
+      - name: Check the contract's version against the parent commit
+        # On a pull request the checkout is GitHub's merge commit, whose first parent is the base branch; on `main` it
+        # is the previous `main`.
+        run: |
+          mkdir "$RUNNER_TEMP/parent"
+          git archive HEAD^1 wit | tar -x -C "$RUNNER_TEMP/parent"
+          scripts/check-wit-compat.sh "$RUNNER_TEMP/parent/wit" wit
 
   # Spelling mistakes in code, comments and docs; everything in the repository is in English.
   typos:
