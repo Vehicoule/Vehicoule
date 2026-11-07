@@ -16,3 +16,4 @@ Only the user moves an ADR from Proposed to Accepted.
 | [0006](0006-license.md) | The app is licensed under GPL-3.0 | Accepted |
 | [0007](0007-plugin-host.md) | Plugins as Wasm components in Wasmtime, with no WASI | Accepted |
 | [0009](0009-declare-every-file-license-with-reuse.md) | Every file's license declared with REUSE, checked in CI | Accepted |
+| [0011](0011-adopt-the-contributor-covenant.md) | The Contributor Covenant 3.0 is the code of conduct, under its own CC BY-SA 4.0 license | Accepted |
