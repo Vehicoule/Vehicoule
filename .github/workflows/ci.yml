@@ -61,6 +61,68 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
 
+  # The app ships on macOS and Windows too (and Android, iOS and the web later): the workspace must build and pass its
+  # tests there, not only on Linux. Same steps as `check`'s tests; format, lints and docs do not depend on the OS.
+  platforms:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One failing platform must not hide another's failure.
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    defaults:
+      run:
+        # The fixture script is bash; Windows runners ship it with Git.
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install wasm-tools
+        run: cargo install wasm-tools --version 1.263.0 --locked --no-default-features --features component
+      - name: Build the plugin host's test plugins
+        run: scripts/build-plugin-fixtures.sh "$RUNNER_TEMP/plugin-fixtures"
+      - name: Test
+        run: cargo test --workspace --locked
+        env:
+          VEHICOULE_PLUGIN_FIXTURES: ${{ runner.temp }}/plugin-fixtures
+
+  # Android's armeabi-v7a is a 32-bit target, where `usize` has 32 bits: the no-overflow rule (AGENTS.md, rule 9) must
+  # hold there too, and the other jobs only run 64-bit. i686 runs natively on the x86-64 runner, so no emulator is
+  # needed. The test plugins are Wasm, so they build as in `check`.
+  test-32-bit:
+    name: test (i686)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned toolchain and its i686 target
+        run: |
+          rustup toolchain install
+          rustup target add i686-unknown-linux-gnu
+      - name: Install the 32-bit C runtime for linking
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-multilib
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install wasm-tools
+        run: cargo install wasm-tools --version 1.263.0 --locked --no-default-features --features component
+      - name: Build the plugin host's test plugins
+        run: scripts/build-plugin-fixtures.sh "$RUNNER_TEMP/plugin-fixtures"
+      - name: Test
+        run: cargo test --workspace --target i686-unknown-linux-gnu --locked
+        env:
+          VEHICOULE_PLUGIN_FIXTURES: ${{ runner.temp }}/plugin-fixtures
+
   # ADR 0004: a mutant that survives the tests means a test that asserts too little, and fails the check.
   # The mutants are split into four shards that run side by side, each on its own runner: one runner took 10 to 19
   # minutes for the whole set. `--in-place` mutates this checkout instead of a copy, so the build reuses the `target/`
