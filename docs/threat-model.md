@@ -1,6 +1,6 @@
 # Threat model: plugins
 
-- Status: Proposed (waiting for the user)
+- Status: Accepted by the user on 2026-11-07
 - Scope: what a plugin, a feed or the network can do to a user of Vehicoule, and which rule or test stops it. The
   plugin host spec ([`plugin-host-spec.md`](plugin-host-spec.md)) says what the host does; this file says why, and
   where the protection is still missing.
