@@ -634,6 +634,9 @@ fn capability(capability: types::Capability) -> Capability {
     }
 }
 
+#[cfg(kani)]
+mod proofs;
+
 #[cfg(test)]
 mod tests {
     use super::*;

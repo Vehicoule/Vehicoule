@@ -149,42 +149,77 @@ impl HostPattern {
     /// Whether `host` is allowed by this pattern, compared without regard to ASCII case.
     #[must_use]
     pub fn matches(&self, host: &str) -> bool {
-        let host = host.to_ascii_lowercase();
-        if !self.subdomains {
-            return host == self.name;
-        }
-        // At least one label and its dot before the name: `a.example.org`, never `.example.org`.
-        host.strip_suffix(self.name.as_str())
-            .and_then(|prefix| prefix.strip_suffix('.'))
-            .is_some_and(is_host_name_prefix)
+        pattern_matches(self.name.as_bytes(), self.subdomains, host.as_bytes())
     }
+}
+
+/// [`HostPattern::matches`] on bytes, for the pattern `name` or `*.name`, proved by Kani for every input up to its
+/// bound (ADR 0014).
+fn pattern_matches(name: &[u8], subdomains: bool, host: &[u8]) -> bool {
+    if !subdomains {
+        return host.eq_ignore_ascii_case(name);
+    }
+    // At least one label and its dot before the name: `a.example.org`, never `.example.org`.
+    host.len()
+        .checked_sub(name.len())
+        .and_then(|split| host.split_at_checked(split))
+        .and_then(|(front, back)| back.eq_ignore_ascii_case(name).then_some(front))
+        .and_then(<[u8]>::split_last)
+        .is_some_and(|(dot, labels)| {
+            *dot == b'.' && are_labels(labels.iter().map(u8::to_ascii_lowercase), LastLabel::Any)
+        })
 }
 
 /// A host name of section 4: labels of 1 to 63 lowercase ASCII letters, digits or `-`, not starting or ending with
 /// `-`, joined by dots, at most 253 bytes, the last label holding a letter.
 pub(crate) fn is_host_name(name: &str) -> bool {
-    name.len() <= 253
-        && name.split('.').all(is_label)
-        && name.rsplit('.').next().is_some_and(has_letter)
+    is_host_name_bytes(name.as_bytes())
 }
 
-/// The labels in front of a subdomain pattern's name, with the same rules as a host name but no letter required.
-fn is_host_name_prefix(prefix: &str) -> bool {
-    prefix.split('.').all(is_label)
+/// [`is_host_name`] on bytes, proved by Kani for every input up to its bound (ADR 0014).
+pub(crate) fn is_host_name_bytes(name: &[u8]) -> bool {
+    name.len() <= 253 && are_host_name_labels(name.iter().copied())
 }
 
-fn is_label(label: &str) -> bool {
-    !label.is_empty()
-        && label.len() <= 63
-        && !label.starts_with('-')
-        && !label.ends_with('-')
-        && label
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+/// The labels of a host name, without its length: the URL check lowercases the host as it reads it.
+pub(crate) fn are_host_name_labels(bytes: impl IntoIterator<Item = u8>) -> bool {
+    are_labels(bytes, LastLabel::NeedsLetter)
 }
 
-fn has_letter(label: &str) -> bool {
-    label.bytes().any(|b| b.is_ascii_lowercase())
+/// What the last label needs besides the rules of every label.
+#[derive(Clone, Copy)]
+enum LastLabel {
+    /// A letter, so that a host name is never an IP address.
+    NeedsLetter,
+    /// Nothing more: the labels in front of a subdomain pattern's name.
+    Any,
+}
+
+/// Whether `bytes` are labels of 1 to 63 lowercase ASCII letters, digits or `-`, not starting or ending with `-`,
+/// joined by dots. One pass byte by byte, without `str` searches, which Kani cannot unwind in reasonable time.
+fn are_labels(bytes: impl IntoIterator<Item = u8>, last: LastLabel) -> bool {
+    let mut length: usize = 0;
+    let mut previous = b'.';
+    let mut letter = false;
+    for byte in bytes {
+        if byte == b'.' {
+            if length == 0 || previous == b'-' {
+                return false;
+            }
+            length = 0;
+            letter = false;
+        } else {
+            let allowed =
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || (byte == b'-' && length > 0);
+            if !allowed || length == 63 {
+                return false;
+            }
+            length = length.saturating_add(1);
+            letter |= byte.is_ascii_lowercase();
+        }
+        previous = byte;
+    }
+    length > 0 && previous != b'-' && (letter || matches!(last, LastLabel::Any))
 }
 
 /// A validated manifest. The edge stores it at install and gives it back; the host enforces it, never a later
@@ -296,6 +331,9 @@ impl Manifest {
         self.http_hosts.iter().any(|pattern| pattern.matches(host))
     }
 }
+
+#[cfg(kani)]
+mod proofs;
 
 #[cfg(test)]
 mod tests {
@@ -517,6 +555,39 @@ mod tests {
             let with_path = format!("{name}/{path}");
             prop_assert!(HostPattern::parse(&with_port).is_err());
             prop_assert!(HostPattern::parse(&with_path).is_err());
+        }
+
+        // The byte-by-byte checks that Kani proves on short inputs agree, on long ones, with the rules of section 4
+        // written with `str` methods.
+        #[test]
+        fn the_host_name_check_follows_section_4(name in "[a-zA-Z0-9.@:-]{0,80}") {
+            let label = |label: &str| {
+                !label.is_empty()
+                    && label.len() <= 63
+                    && !label.starts_with('-')
+                    && !label.ends_with('-')
+                    && label.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            };
+            let expected = name.len() <= 253
+                && name.split('.').all(label)
+                && name.rsplit('.').next().is_some_and(|last| last.bytes().any(|b| b.is_ascii_lowercase()));
+            prop_assert_eq!(is_host_name(&name), expected, "{}", name);
+        }
+
+        #[test]
+        fn a_subdomain_pattern_matches_what_section_4_says(name in host_name(), front in "[a-zA-Z0-9.-]{0,20}") {
+            let pattern = HostPattern::parse(&format!("*.{name}")).unwrap();
+            let host = format!("{front}{name}");
+            let lower = host.to_ascii_lowercase();
+            let expected = lower
+                .strip_suffix(name.as_str())
+                .and_then(|labels| labels.strip_suffix('.'))
+                .is_some_and(|labels| {
+                    labels.split('.').all(|l| {
+                        !l.is_empty() && l.len() <= 63 && !l.starts_with('-') && !l.ends_with('-')
+                    })
+                });
+            prop_assert_eq!(pattern.matches(&host), expected, "{}", host);
         }
     }
 }
