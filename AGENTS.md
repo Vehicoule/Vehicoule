@@ -79,6 +79,8 @@ cargo deny check
 cargo deny --manifest-path crates/vehicoule-plugin-host/fuzz/Cargo.toml check
 cargo mutants --workspace --cargo-arg=--locked   # cargo-mutants 27.1.0
 wasm-tools component wit wit/ > /dev/null       # wasm-tools 1.263.0, the plugin contract parses
+scripts/test-check-wit-compat.sh                 # the contract's version check passes its cases
+scripts/check-wit-compat.sh OLD_WIT_DIR wit      # a change to the contract follows its version rule
 cargo kani --workspace                           # Kani 0.68.0, after `cargo kani setup`
 typos                                            # typos-cli 1.52.0
 cargo machete                                    # cargo-machete 0.9.2, no unused dependency

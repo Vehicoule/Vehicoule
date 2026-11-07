@@ -130,6 +130,11 @@ Versioning: the package follows semver. While it is `0.x`, the host accepts exac
 with. A change to the contract is a pull request that changes `wit/`, the host and its tests together, and the plugins
 repository bumps its pinned copy in a pull request of its own.
 
+CI checks every change to `wit/` against the parent commit with `scripts/check-wit-compat.sh`: a contract that changed
+(apart from its doc comments and layout) raises its version, the version never goes down, and while it stays on the
+line the host accepts (the same minor while it is `0.x`), a component that implements any world of the old contract
+still targets the world of the same name in the new one (`wasm-tools component targets`).
+
 ## 9. Tests
 
 The host is tested with small plugins written for the purpose, built to components in CI. The network is a trait
