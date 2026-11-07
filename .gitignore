@@ -7,3 +7,7 @@ mutants.out*/
 /crates/vehicoule-plugin-host/fuzz/corpus
 /crates/vehicoule-plugin-host/fuzz/artifacts
 /crates/vehicoule-plugin-host/fuzz/coverage
+/crates/vehicoule-core/fuzz/target
+/crates/vehicoule-core/fuzz/corpus
+/crates/vehicoule-core/fuzz/artifacts
+/crates/vehicoule-core/fuzz/coverage
