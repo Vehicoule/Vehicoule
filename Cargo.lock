@@ -1092,6 +1092,10 @@ checksum = "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
 [[package]]
 name = "vehicoule-core"
 version = "0.0.0"
+dependencies = [
+ "proptest",
+ "thiserror",
+]
 
 [[package]]
 name = "vehicoule-plugin-host"
