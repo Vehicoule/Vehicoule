@@ -104,16 +104,89 @@ snapshots, on every platform. That is what makes the black box replay and the Ka
 
 ```
 Idle
-Resolving { entry }                  waiting for the resolver to give a playable source
-Loading   { entry, source }          the platform player is opening it
-Playing   { entry, anchor }
-Paused    { entry, position }
-Buffering { entry, position }
-Stopped   { entry, position }        after an explicit stop; resumable
+Resolving { entry, from, request }             waiting for the resolver to give a playable source
+Loading   { entry, source, from, duration }    the platform player is opening it, to play from `from`
+Playing   { entry, anchor, duration }
+Paused    { entry, position, duration }
+Buffering { entry, position, duration }
+Stopped   { entry, position }                  after an explicit stop; resumable
 WaitingForNetwork { entry }          offline, nothing downloaded ahead (section 3, Offline)
 ```
 
 Errors are not a resting state: a failure moves the session on (section 5) and is reported in the snapshot.
+
+`from` is the position playback starts at: zero for a new entry, the kept position when a stopped entry resumes.
+`duration` is the media's duration when the resolver knew it, kept from the resolution while the source is loaded, so
+that positions are clamped to it (Position, below). `request` identifies the `Resolve` the player waits for (Events and
+transitions, below).
+
+### Events and transitions
+
+Every event comes with `now`. The player of a session changes state only as the table below says; any other event in
+any other state changes nothing and sends no command. Section 5 adds failures and deadlines, section 3 the offline
+state `WaitingForNetwork`; both come with their own pull requests.
+
+Events:
+
+- From the user, through the shell or the session's queue: `Start { entry }` (the queue's current entry changed),
+  `Pause`, `Resume`, `Stop`, `Seek { position }`.
+- From the resolver: `Resolved { request, source, duration }`, the answer to the `Resolve` that carried `request`,
+  where `duration` is the media's duration when known.
+- From the platform player, each naming the entry it is about: `Playing { entry, anchor }` (it plays from the anchor:
+  start, resume, seek done, rate change, end of buffering, discontinuity), `Paused { entry, position }`,
+  `Buffering { entry, position }`, `Ended { entry }`.
+
+A late event changes nothing: a report about another entry than the player's, or a resolution of another request than
+the one the player waits for. The request, not the entry, says which resolution is awaited, because one entry can be
+resolved several times in a row: stopped while resolving and resumed, or started again while resolving. An answer to
+the earlier request must not be loaded in place of the new one. A resolution cannot be cancelled and no command
+separates the two requests, so the player numbers its requests; the edges give the number back unchanged. The numbers
+are those of a 64-bit counter, which would take 2^64 requests to come back to a number still in flight.
+
+Reports need no number. The edges run the commands in order and give the events in order, and give no report about a
+source after running the `Stop` that released it, nor after reporting `Ended` for it. Every way out of a loaded source
+is one of the two (the table below), so a report from a source left behind comes before the resolution that follows,
+while the player is `Stopped`, `Idle` or `Resolving`, where reports change nothing.
+
+The resolution of the next entry for preloading (section 3, Preloading) is not given to the player: the session keeps
+it for when that entry starts, and comes with the preloading pull request.
+
+Commands: `Resolve { entry, request }`, `Load { source, from }`, `Play`, `Pause`, `Seek { position }`, `Stop`.
+`Load` opens the source and plays it from `from` as soon as it can: no `Play` follows it, and the platform reports
+`Playing` once it plays.
+
+| State | Event | Next state | Commands |
+|---|---|---|---|
+| any | `Start { e }` | `Resolving { e, 0, r }` | `Stop` when a source was loaded (`Loading`, `Playing`, `Paused`, `Buffering`), then `Resolve { e, r }` |
+| `Resolving { e, from, r }` | `Resolved { r, s, d }` | `Loading { e, s, min(from, d), d }` | `Load { s, min(from, d) }` |
+| `Loading { e, .. }` | `Playing { e, a }` | `Playing { e, a, d }` | |
+| `Playing { e, .. }` or `Buffering { e, .. }` | `Playing { e, a }` | `Playing { e, a, d }` | |
+| `Playing { e, a, d }` | `Pause` | `Paused { e, a at now, d }` | `Pause` |
+| `Buffering { e, p, d }` | `Pause` | `Paused { e, p, d }` | `Pause` |
+| `Paused { e, p, d }` | `Resume` | `Buffering { e, p, d }` | `Play` |
+| `Paused { e, .. }` | `Paused { e, p }` | `Paused { e, min(p, d), d }` | |
+| `Playing { e, .. }` | `Buffering { e, p }` | `Buffering { e, min(p, d), d }` | |
+| `Playing { e, .. }` or `Buffering { e, .. }` | `Seek { p }` | `Buffering { e, min(p, d), d }` | `Seek { min(p, d) }` |
+| `Paused { e, .. }` | `Seek { p }` | `Paused { e, min(p, d), d }` | `Seek { min(p, d) }` |
+| `Stopped { e, .. }` | `Seek { p }` | `Stopped { e, p }` | |
+| `Resolving`, `Loading`, `Playing`, `Paused` or `Buffering`, on `e` | `Stop` | `Stopped { e, position }` | `Stop` when a source was loaded |
+| `Stopped { e, p }` | `Resume` | `Resolving { e, p, r }` | `Resolve { e, r }` |
+| `Playing { e, .. }` or `Buffering { e, .. }` | `Ended { e }` | see below | |
+
+- `r` is a new request number, different from every request still in flight. `d` is the duration the state had,
+  carried along. `a at now` is the anchor's position at `now`, clamped to `d` (Position, below). `min(p, d)` is `p`
+  clamped to `d`, and `p` itself when the duration is unknown: the player never sends or shows a position beyond the
+  known duration. `Stopped` and `Resolving` know no duration, so a position kept there is clamped by `Resolved`.
+  `position` in `Stop` is the position of the state left: `a at now` from `Playing`, the kept position from `Paused`
+  and `Buffering`, `from` from `Resolving` and `Loading`. `Stop` in `WaitingForNetwork`, which keeps no position, comes
+  with that state's pull request.
+- `Buffering` is also where the player waits after `Resume` and `Seek`, until the platform reports `Playing`: section 5
+  gives it its deadline.
+- `Ended { e }`: the session advances its queue as an entry that ended by itself (`Advance::Finished`). The player
+  gets `Start` for the new current entry, or goes `Idle`, with no command, when the queue has ended.
+- `Pause` and `Seek` before the platform first reports `Playing` (in `Resolving` and `Loading`) change nothing: the
+  shell shows them unavailable in those states, from the snapshot.
+- A stopped entry resumes from a new resolution: its source may have expired while it was stopped.
 
 ### Position
 
