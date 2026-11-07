@@ -2,3 +2,8 @@
 .DS_Store
 mutants.out*/
 /crates/vehicoule-plugin-host/fixtures/target
+# What cargo-fuzz builds and finds (ADR 0013): a crash found is fixed with a regression test (ADR 0012), not kept here.
+/crates/vehicoule-plugin-host/fuzz/target
+/crates/vehicoule-plugin-host/fuzz/corpus
+/crates/vehicoule-plugin-host/fuzz/artifacts
+/crates/vehicoule-plugin-host/fuzz/coverage

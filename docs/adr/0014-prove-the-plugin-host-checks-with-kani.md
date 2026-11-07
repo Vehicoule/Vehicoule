@@ -20,8 +20,8 @@
 
 They are covered by unit tests, property tests, tests against real Wasm plugins and mutation testing. A property test
 samples inputs; it cannot show that no input of a given size gets through. Fuzzing of the plugin host's public entry
-points is decided by ADR 0013 (pull request #24); the URL and header checks are crate-private, out of its
-reach.
+points is decided by [ADR 0013](0013-fuzz-the-plugin-hosts-untrusted-inputs.md); the URL and header checks are
+crate-private, out of its reach.
 
 On 2026-11-06 the user chose, among "property tests only", "Kani on the security checks" and "Kani and fuzzing of
 install", the third. ADR 0013 covers the fuzzing; this ADR covers the proofs.
