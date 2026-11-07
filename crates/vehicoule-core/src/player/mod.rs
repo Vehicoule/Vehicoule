@@ -112,24 +112,35 @@ impl Anchor {
     /// beyond `duration` when the media's duration is known.
     ///
     /// An instant before the report gives the reported position: the position does not go back in time. A position
-    /// too far to represent is [`Duration::MAX`], then clamped to `duration`. At a rate other than normal speed, the
-    /// time since the report is scaled before it is added, and a scaling that overflows also gives [`Duration::MAX`]:
-    /// it needs more than half a billion years since the report at normal speed, less at a faster rate.
+    /// too far to represent is [`Duration::MAX`], then clamped to `duration`.
     #[must_use]
     pub fn position_at(&self, now: Instant, duration: Option<Duration>) -> Duration {
         let elapsed = now.saturating_since(self.instant);
-        // Normal speed, the common case, adds the time since the report as it is: exact at any length, and with no
-        // multiplication or division, which is what lets Kani prove that the position never goes backwards at rate 1
+        // Normal speed, the common case, adds the time since the report as it is. `scale` gives the same result,
+        // but with no multiplication or division Kani can prove that the position never goes backwards at rate 1
         // (core spec, section 4) for any instants.
         let advanced = if self.rate == Rate::NORMAL {
             elapsed
         } else {
-            elapsed
-                .checked_mul(self.rate.0)
-                .and_then(|scaled| scaled.checked_div(NORMAL_THOUSANDTHS))
-                .unwrap_or(Duration::MAX)
+            scale(elapsed, self.rate)
         };
         let position = self.position.saturating_add(advanced);
         duration.map_or(position, |duration| position.min(duration))
     }
+}
+
+/// `elapsed × rate`, rounded down to the nanosecond, or [`Duration::MAX`] when that is too far to represent.
+///
+/// `elapsed` is split into a thousand times `whole` plus `rest`, under a microsecond, so that only a result too far to
+/// represent saturates: multiplying `elapsed` by the thousandths first would overflow a thousand times too early.
+fn scale(elapsed: Duration, rate: Rate) -> Duration {
+    let whole = elapsed
+        .checked_div(NORMAL_THOUSANDTHS)
+        .unwrap_or(Duration::ZERO);
+    let rest = elapsed.saturating_sub(whole.saturating_mul(NORMAL_THOUSANDTHS));
+    let scaled_rest = rest
+        .saturating_mul(rate.0)
+        .checked_div(NORMAL_THOUSANDTHS)
+        .unwrap_or(Duration::ZERO);
+    whole.saturating_mul(rate.0).saturating_add(scaled_rest)
 }

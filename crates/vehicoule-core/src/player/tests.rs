@@ -79,16 +79,33 @@ fn a_position_too_far_to_represent_saturates_instead_of_wrapping() {
 }
 
 #[test]
-fn at_normal_speed_the_position_is_exact_where_scaling_would_overflow() {
-    // A thousand times this many seconds does not fit in a `Duration`; at normal speed nothing is scaled.
+fn a_scaled_position_that_fits_does_not_saturate() {
+    // A thousand times the elapsed time overflows a `Duration`, but 1.001 times it fits.
     let long = Duration::from_secs(u64::MAX / 2);
-    let anchor = Anchor::new(at(0), Duration::ZERO, Rate::NORMAL);
-    assert_eq!(anchor.position_at(Instant::from_origin(long), None), long);
+    let expected = reference_scale(long, 1_001);
+    assert!(expected > long && expected < Duration::MAX);
     let barely_faster = Anchor::new(at(0), Duration::ZERO, Rate::from_thousandths(1_001));
     assert_eq!(
         barely_faster.position_at(Instant::from_origin(long), None),
-        Duration::MAX
+        expected
     );
+    let normal = Anchor::new(at(0), Duration::ZERO, Rate::NORMAL);
+    assert_eq!(normal.position_at(Instant::from_origin(long), None), long);
+}
+
+/// `elapsed × thousandths / 1000` in nanoseconds on `u128`, where nothing overflows, saturated to `Duration::MAX`.
+fn reference_scale(elapsed: Duration, thousandths: u32) -> Duration {
+    let nanos = elapsed
+        .as_nanos()
+        .checked_mul(u128::from(thousandths))
+        .unwrap()
+        / 1_000;
+    if nanos > Duration::MAX.as_nanos() {
+        return Duration::MAX;
+    }
+    let secs = u64::try_from(nanos / 1_000_000_000).unwrap();
+    let subsec = u32::try_from(nanos % 1_000_000_000).unwrap();
+    Duration::new(secs, subsec)
 }
 
 #[test]
@@ -145,6 +162,15 @@ proptest! {
     ) {
         let anchor = Anchor::new(Instant::from_origin(reported), position, Rate::from_thousandths(rate));
         prop_assert!(anchor.position_at(Instant::from_origin(now), Some(duration)) <= duration);
+    }
+
+    #[test]
+    fn the_time_since_the_report_is_scaled_exactly_or_saturates_only_beyond_the_maximum(
+        elapsed in any_duration(),
+        rate in any::<u32>(),
+    ) {
+        let anchor = Anchor::new(Instant::default(), Duration::ZERO, Rate::from_thousandths(rate));
+        prop_assert_eq!(anchor.position_at(Instant::from_origin(elapsed), None), reference_scale(elapsed, rate));
     }
 
     #[test]
