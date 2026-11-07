@@ -10,10 +10,11 @@ Vehicoule has no server of its own: content comes from plugins, and each plugin 
 ([ADR 0007](0007-plugin-host.md)). Whether the app also sends anything to the project is a product commitment that
 users, stores and contributors read, so it is decided once, here.
 
-- A crash can only be fixed once someone sees it. The runner already keeps a bounded log of every event and command
-  that a test can replay ([core playback spec §6](../core-playback-spec.md)), so one report can be enough to reproduce
-  a bug.
-- That log holds what the user played and searched for: personal data the user must see before it leaves the device.
+- A crash can only be fixed once someone sees it. The core playback spec plans a bounded log, kept by the runner, of
+  every event and command, which a test can replay ([§6](../core-playback-spec.md)); neither the runner nor the log
+  exists yet. Once they do, one report holding that log could be enough to reproduce a bug.
+- Such a log would hold what the user played and searched for: personal data the user must see before it leaves the
+  device.
 - Google Play asks every app to fill in its Data safety section and to give a privacy policy, even an app that
   collects nothing ([Play Console Help](https://support.google.com/googleplay/android-developer/answer/10787469)).
 
@@ -22,7 +23,7 @@ users, stores and contributors read, so it is decided once, here.
 1. **Nothing, ever.** No telemetry and no crash reports. The strongest promise; crashes are known only when a user
    writes an issue by hand.
 2. **No telemetry; crash reports only on request.** Nothing is sent automatically. After a crash, the user may send a
-   report, after seeing all of its content. Crashes become fixable from their log without tracking anyone.
+   report, after seeing all of its content. Crashes become fixable from their report without tracking anyone.
 3. **Telemetry on by default, with a way to opt out.** Usage statistics and automatic crash reports. Breaks the
    promise of an app with no server, and needs a server and its data to protect.
 
