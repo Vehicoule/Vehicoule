@@ -2,10 +2,12 @@
 //!
 //! Two kinds of proofs:
 //!
-//! - **Position logic, for any length.** Every move through the play order goes through `position_forward`,
-//!   `position_back` and `position_after`, and every shuffle through `fisher_yates`. Their proofs take any length and
-//!   any position, so a move can never point outside the queue and a shuffled order is always a permutation, whatever
-//!   the queue's size.
+//! - **Position logic.** Every move through the play order goes through `position_forward` and `position_back`, every
+//!   insertion point through `index_after`, and every shuffle through `fisher_yates`. The first three are proved for
+//!   any length and any position, so a move or an insertion point never points outside the queue, whatever its size.
+//!   `fisher_yates` works on a slice, which Kani can only build from a fixed-size array: it is proved a permutation for
+//!   every length up to 5 and every choice of the generator. Its loop does the same thing at every length, swapping
+//!   the last entry left with one picked below it.
 //! - **Every operation, inductively, on small queues.** Starting from *any* queue of 0 to 3 entries that satisfies the
 //!   invariants, with any current entry, repeat mode, shuffled order and next id, and with any arguments, each
 //!   operation keeps the invariants, loses or duplicates no entry (invariant 5), and leaves the queue unchanged when it
@@ -451,7 +453,7 @@ fn jump_to(len: usize) {
     }
 }
 
-// Position logic, for any length.
+// Position logic.
 
 #[kani::proof]
 fn forward_stays_in_the_queue() {
@@ -483,7 +485,18 @@ fn back_stays_in_the_queue() {
     }
 }
 
-/// The insertion point after the current entry is a valid `splice` position: never beyond the end.
+/// The point after a found position is never beyond the end, for any length. `position` finds an index below the
+/// length, so the insertion point after the current entry is always in bounds.
+#[kani::proof]
+fn point_after_a_found_position_is_in_bounds() {
+    let (len, found): (usize, Option<usize>) = (kani::any(), kani::any());
+    kani::assume(found.is_none_or(|position| position < len));
+    let at = index_after(found);
+    assert!(at <= len);
+    assert!(at == found.map_or(0, |position| position + 1));
+}
+
+/// The insertion point after the current entry, found in the play order, is never beyond the end.
 #[kani::proof]
 #[kani::unwind(6)]
 fn insertion_point_is_in_bounds() {
