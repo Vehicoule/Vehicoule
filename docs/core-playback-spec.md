@@ -104,8 +104,8 @@ snapshots, on every platform. That is what makes the black box replay and the Ka
 
 ```
 Idle
-Resolving { entry }                  waiting for the resolver to give a playable source
-Loading   { entry, source }          the platform player is opening it
+Resolving { entry, from }            waiting for the resolver to give a playable source
+Loading   { entry, source, from }    the platform player is opening it, to play from `from`
 Playing   { entry, anchor }
 Paused    { entry, position }
 Buffering { entry, position }
@@ -114,6 +114,55 @@ WaitingForNetwork { entry }          offline, nothing downloaded ahead (section 
 ```
 
 Errors are not a resting state: a failure moves the session on (section 5) and is reported in the snapshot.
+
+`from` is the position playback starts at: zero for a new entry, the kept position when a stopped entry resumes.
+
+### Events and transitions
+
+Every event comes with `now`. The player of a session changes state only as the table below says; any other event in
+any other state changes nothing and sends no command. Section 5 adds failures and deadlines, section 3 the offline
+state `WaitingForNetwork`; both come with their own pull requests.
+
+Events:
+
+- From the user, through the shell or the session's queue: `Start { entry }` (the queue's current entry changed),
+  `Pause`, `Resume`, `Stop`, `Seek { position }`.
+- From the resolver: `Resolved { entry, source, duration }`, where `duration` is the media's duration when known.
+- From the platform player, each naming the entry it is about: `Playing { entry, anchor }` (it plays from the anchor:
+  start, resume, seek done, rate change, end of buffering, discontinuity), `Paused { entry, position }`,
+  `Buffering { entry, position }`, `Ended { entry }`. A report or a resolution about another entry than the player's is
+  late, and changes nothing.
+
+Commands: `Resolve { entry }`, `Load { source, from }`, `Play`, `Pause`, `Seek { position }`, `Stop`.
+
+| State | Event | Next state | Commands |
+|---|---|---|---|
+| any | `Start { e }` | `Resolving { e, 0 }` | `Stop` when a source was loaded (`Loading`, `Playing`, `Paused`, `Buffering`), then `Resolve { e }` |
+| `Resolving { e, from }` | `Resolved { e, s, d }` | `Loading { e, s, from }` | `Load { s, from }` |
+| `Loading { e, .. }` | `Playing { e, a }` | `Playing { e, a }` | |
+| `Playing { e, .. }` or `Buffering { e, .. }` | `Playing { e, a }` | `Playing { e, a }` | |
+| `Playing { e, a }` | `Pause` | `Paused { e, a at now }` | `Pause` |
+| `Buffering { e, p }` | `Pause` | `Paused { e, p }` | `Pause` |
+| `Paused { e, p }` | `Resume` | `Buffering { e, p }` | `Play` |
+| `Paused { e, .. }` | `Paused { e, p }` | `Paused { e, p }` | |
+| `Playing { e, .. }` | `Buffering { e, p }` | `Buffering { e, p }` | |
+| `Playing { e, .. }` or `Buffering { e, .. }` | `Seek { p }` | `Buffering { e, p }` | `Seek { p }` |
+| `Paused { e, .. }` | `Seek { p }` | `Paused { e, p }` | `Seek { p }` |
+| `Stopped { e, .. }` | `Seek { p }` | `Stopped { e, p }` | |
+| any with an entry, but `Stopped` | `Stop` | `Stopped { e, position }` | `Stop` when a source was loaded |
+| `Stopped { e, p }` | `Resume` | `Resolving { e, p }` | `Resolve { e }` |
+| `Playing { e, .. }` or `Buffering { e, .. }` | `Ended { e }` | see below | |
+
+- `a at now` is the anchor's position at `now`, clamped to the duration the resolver gave (section 4, Position).
+  `position` in `Stop` is the position of the state left: `a at now` from `Playing`, the kept position from `Paused`
+  and `Buffering`, `from` from `Resolving` and `Loading`.
+- `Buffering` is also where the player waits after `Resume` and `Seek`, until the platform reports `Playing`: section 5
+  gives it its deadline.
+- `Ended { e }`: the session advances its queue as an entry that ended by itself (`Advance::Finished`). The player
+  gets `Start` for the new current entry, or goes `Idle`, with no command, when the queue has ended.
+- `Pause` and `Seek` before the platform first reports `Playing` (in `Resolving` and `Loading`) change nothing: the
+  shell shows them unavailable in those states, from the snapshot.
+- A stopped entry resumes from a new resolution: its source may have expired while it was stopped.
 
 ### Position
 
