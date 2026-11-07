@@ -73,6 +73,12 @@ fn behavior() -> Manifest {
     manifest("missing", vec![Capability::Resolve], hosts())
 }
 
+#[cfg(feature = "huge-manifest")]
+fn behavior() -> Manifest {
+    // 70,000 bytes of name: valid by the manifest rules, over the tests' 64 KiB output ceiling.
+    manifest(&"n".repeat(70_000), Vec::new(), hosts())
+}
+
 #[cfg(feature = "bad-host-pattern")]
 fn behavior() -> Manifest {
     let mut patterns = hosts();
@@ -136,18 +142,115 @@ fn behavior() -> Manifest {
     manifest(name, Vec::new(), hosts())
 }
 
+/// `search` does what its query says, so one plugin covers every call the tests make: `trap`, `loop`, `grow`,
+/// `count` (how many calls this instance has seen), `big:N` (a title of N bytes), `empty:N` (N artists with empty
+/// strings), `error:KIND`; any other query
+/// returns one item of each requested kind, titled after the query.
 #[cfg(any(feature = "good", feature = "undeclared-export"))]
 impl exports::vehicoule::plugin::search::Guest for Fixture {
     fn search(
         query: String,
-        _kinds: Vec<vehicoule::plugin::types::ItemKind>,
-        _cursor: Option<String>,
+        kinds: Vec<vehicoule::plugin::types::ItemKind>,
+        cursor: Option<String>,
     ) -> Result<exports::vehicoule::plugin::search::Page, vehicoule::plugin::types::Error> {
-        Err(vehicoule::plugin::types::Error::InvalidInput(query))
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use vehicoule::plugin::types::{
+            Album, AlbumRef, Artist, ArtistRef, Artwork, Error, Item, ItemKind, Playlist, Track,
+        };
+
+        static CALLS: AtomicU32 = AtomicU32::new(0);
+        let calls = CALLS.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
+
+        let track = |title: String| Track {
+            id: String::from("track-1"),
+            title,
+            artists: vec![ArtistRef {
+                id: String::from("artist-1"),
+                name: String::from("Artist"),
+            }],
+            album: Some(AlbumRef {
+                id: String::from("album-1"),
+                title: String::from("Album"),
+            }),
+            duration_ms: Some(215_000),
+            isrc: Some(String::from("FRZ039800212")),
+            artwork: vec![Artwork {
+                url: String::from("https://a.cdn.example.org/cover.jpg"),
+                width: Some(544),
+                height: None,
+            }],
+        };
+        let page = |items: Vec<Item>| exports::vehicoule::plugin::search::Page {
+            items,
+            next: Some(cursor.clone().map_or(String::from("page-2"), |c| c + "+")),
+        };
+
+        match query.as_str() {
+            "trap" => panic!("trap on purpose"),
+            "loop" => {
+                let mut n: u64 = 0;
+                loop {
+                    n = std::hint::black_box(n.wrapping_add(1));
+                }
+            }
+            "grow" => {
+                let mut chunks: Vec<Vec<u8>> = Vec::new();
+                loop {
+                    chunks.push(std::hint::black_box(vec![1u8; 1 << 20]));
+                }
+            }
+            "count" => Ok(page(vec![Item::Track(track(calls.to_string()))])),
+            "error:not-found" => Err(Error::NotFound),
+            "error:unsupported" => Err(Error::Unsupported),
+            "error:rate-limited" => Err(Error::RateLimited(Some(1_500))),
+            "error:invalid-input" => Err(Error::InvalidInput(String::from("bad query"))),
+            "error:upstream" => Err(Error::Upstream(String::from("service down"))),
+            q if q.starts_with("empty:") => {
+                let n = q.trim_start_matches("empty:").parse().unwrap_or(0);
+                let empty = || {
+                    Item::Artist(Artist {
+                        id: String::new(),
+                        name: String::new(),
+                        artwork: Vec::new(),
+                    })
+                };
+                Ok(page(std::iter::repeat_with(empty).take(n).collect()))
+            }
+            q if q.starts_with("big:") => {
+                let n = q.trim_start_matches("big:").parse().unwrap_or(0);
+                Ok(page(vec![Item::Track(track("a".repeat(n)))]))
+            }
+            _ => Ok(page(
+                kinds
+                    .iter()
+                    .map(|kind| match kind {
+                        ItemKind::Track => Item::Track(track(query.clone())),
+                        ItemKind::Album => Item::Album(Album {
+                            id: String::from("album-1"),
+                            title: query.clone(),
+                            artists: Vec::new(),
+                            year: Some(1998),
+                            artwork: Vec::new(),
+                        }),
+                        ItemKind::Artist => Item::Artist(Artist {
+                            id: String::from("artist-1"),
+                            name: query.clone(),
+                            artwork: Vec::new(),
+                        }),
+                        ItemKind::Playlist => Item::Playlist(Playlist {
+                            id: String::from("playlist-1"),
+                            title: query.clone(),
+                            owner: None,
+                            artwork: Vec::new(),
+                        }),
+                    })
+                    .collect(),
+            )),
+        }
     }
 
-    fn suggest(_prefix: String) -> Result<Vec<String>, vehicoule::plugin::types::Error> {
-        Ok(Vec::new())
+    fn suggest(prefix: String) -> Result<Vec<String>, vehicoule::plugin::types::Error> {
+        Ok(vec![prefix.clone() + " live", prefix + " remix"])
     }
 }
 

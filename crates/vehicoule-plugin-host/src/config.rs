@@ -62,8 +62,14 @@ impl Fuel {
 /// ```
 /// use vehicoule_plugin_host::{ByteSize, Fuel, HostConfig};
 ///
-/// let config = HostConfig::new(ByteSize::new(8 << 20), Fuel::new(50_000_000), ByteSize::new(64 << 20));
+/// let config = HostConfig::new(
+///     ByteSize::new(8 << 20),
+///     Fuel::new(50_000_000),
+///     ByteSize::new(64 << 20),
+///     ByteSize::new(1 << 20),
+/// );
 /// assert_eq!(config.max_plugin_size, ByteSize::new(8 << 20));
+/// assert_eq!(config.max_output, ByteSize::new(1 << 20));
 /// ```
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,16 +80,25 @@ pub struct HostConfig {
     pub fuel_per_call: Fuel,
     /// The ceiling on the bytes a call holds in all of its linear memories and tables together.
     pub max_memory: ByteSize,
+    /// The ceiling on the size of what a call returns: the bytes of every string in the value, plus one for every
+    /// element of every list.
+    pub max_output: ByteSize,
 }
 
 impl HostConfig {
     /// Budgets from the edge's configuration.
     #[must_use]
-    pub const fn new(max_plugin_size: ByteSize, fuel_per_call: Fuel, max_memory: ByteSize) -> Self {
+    pub const fn new(
+        max_plugin_size: ByteSize,
+        fuel_per_call: Fuel,
+        max_memory: ByteSize,
+        max_output: ByteSize,
+    ) -> Self {
         Self {
             max_plugin_size,
             fuel_per_call,
             max_memory,
+            max_output,
         }
     }
 }

@@ -21,6 +21,7 @@ features=(
   declares-missing-export
   undeclared-export
   bad-host-pattern
+  huge-manifest
 )
 
 for feature in "${features[@]}"; do
