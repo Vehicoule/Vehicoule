@@ -11,7 +11,7 @@ use crate::bindings::search::exports::vehicoule::plugin::search;
 
 /// A picture of an item, as the provider serves it.
 #[non_exhaustive]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Artwork {
     /// Where the picture is.
     pub url: String,
@@ -23,7 +23,7 @@ pub struct Artwork {
 
 /// An artist named by another item.
 #[non_exhaustive]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ArtistRef {
     /// The provider's id of the artist.
     pub id: String,
@@ -33,7 +33,7 @@ pub struct ArtistRef {
 
 /// An album named by a track.
 #[non_exhaustive]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AlbumRef {
     /// The provider's id of the album.
     pub id: String,
@@ -43,7 +43,7 @@ pub struct AlbumRef {
 
 /// A track.
 #[non_exhaustive]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Track {
     /// The provider's id of the track.
     pub id: String,
@@ -359,6 +359,52 @@ impl From<ItemKind> for types::ItemKind {
     }
 }
 
+impl From<&Artwork> for types::Artwork {
+    fn from(artwork: &Artwork) -> Self {
+        Self {
+            url: artwork.url.clone(),
+            width: artwork.width,
+            height: artwork.height,
+        }
+    }
+}
+
+impl From<&ArtistRef> for types::ArtistRef {
+    fn from(artist: &ArtistRef) -> Self {
+        Self {
+            id: artist.id.clone(),
+            name: artist.name.clone(),
+        }
+    }
+}
+
+impl From<&AlbumRef> for types::AlbumRef {
+    fn from(album: &AlbumRef) -> Self {
+        Self {
+            id: album.id.clone(),
+            title: album.title.clone(),
+        }
+    }
+}
+
+/// A track handed to a plugin, as the contract has it: the duration becomes milliseconds, rounded down, and saturates
+/// at the largest value the contract's `u64` field holds.
+impl From<&Track> for types::Track {
+    fn from(track: &Track) -> Self {
+        Self {
+            id: track.id.clone(),
+            title: track.title.clone(),
+            artists: track.artists.iter().map(Into::into).collect(),
+            album: track.album.as_ref().map(Into::into),
+            duration_ms: track
+                .duration
+                .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)),
+            isrc: track.isrc.clone(),
+            artwork: track.artwork.iter().map(Into::into).collect(),
+        }
+    }
+}
+
 impl From<search::Page> for Page {
     fn from(page: search::Page) -> Self {
         Self {
@@ -368,7 +414,7 @@ impl From<search::Page> for Page {
     }
 }
 
-fn convert<A, B: From<A>>(values: Vec<A>) -> Vec<B> {
+pub(crate) fn convert<A, B: From<A>>(values: Vec<A>) -> Vec<B> {
     values.into_iter().map(B::from).collect()
 }
 

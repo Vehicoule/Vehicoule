@@ -9,9 +9,9 @@
 //! It installs a plugin: size ceiling, compilation, imports, `describe` with every request refused, manifest rules,
 //! and capabilities matched against exports
 //! ([spec](https://github.com/Vehicoule/Vehicoule/blob/main/docs/plugin-host-spec.md), sections 3 to 5). It calls
-//! the search capability in a fresh store per call, with fuel, memory and output budgets (sections 3, 6 and 7), and
-//! gives plugins the network through a sandbox with its own budgets (sections 5 and 6). Each call returns a report of
-//! what it used (section 7). The other capabilities come next.
+//! the search and radio capabilities in a fresh store per call, with fuel, memory and output budgets (sections 3, 6
+//! and 7), and gives plugins the network through a sandbox with its own budgets (sections 5 and 6). Each call returns a
+//! report of what it used (section 7). The other capabilities come next.
 
 mod bindings;
 mod call;

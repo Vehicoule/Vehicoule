@@ -12,8 +12,9 @@ use common::{
     MAX_RESPONSE_BODY, REQUEST_DEADLINE, fixture, host, host_on, host_ticking,
 };
 use vehicoule_plugin_host::{
-    ByteSize, CallReport, Capability, Fuel, HttpResponse, InstalledPlugin, Item, ItemKind,
-    LogLevel, Method, NetworkError, PluginError, PluginFailure, PluginHost,
+    AlbumRef, ArtistRef, Artwork, ByteSize, CallReport, Capability, Fuel, HttpResponse,
+    InstalledPlugin, Item, ItemKind, LogLevel, Method, NetworkError, PluginError, PluginFailure,
+    PluginHost, Track,
 };
 
 /// A host with the `good` plugin installed; an error says which step failed, and the calling test unwraps it.
@@ -770,4 +771,219 @@ fn what_a_plugin_logged_before_it_trapped_is_kept() {
     assert_eq!(call.report.logs.len(), 1);
     assert_eq!(call.report.logs[0].level, LogLevel::Error);
     assert_eq!(call.report.logs[0].message, "about to trap");
+}
+
+// Radio (docs/plugin-host-spec.md, sections 3, 6, 7 and 8): the `radio` plugin's `continuation` does what its seed's id
+// says (see `fixtures/src/lib.rs`).
+
+/// A host with the `radio` plugin installed.
+fn radio_plugin() -> Result<(PluginHost, InstalledPlugin), String> {
+    let host = host().map_err(|e| e.to_string())?;
+    let plugin = host
+        .install(&fixture("radio")?)
+        .map_err(|e| e.to_string())?;
+    Ok((host, plugin))
+}
+
+fn seed(id: &str) -> Track {
+    let mut seed = Track::default();
+    id.clone_into(&mut seed.id);
+    "Seed".clone_into(&mut seed.title);
+    seed
+}
+
+#[test]
+fn the_radio_plugin_installs_with_the_radio_capability_only() {
+    let (_, plugin) = radio_plugin().unwrap();
+    assert_eq!(
+        plugin
+            .manifest()
+            .capabilities()
+            .iter()
+            .copied()
+            .collect::<Vec<_>>(),
+        [Capability::Radio]
+    );
+}
+
+#[test]
+fn every_field_of_the_seed_the_excluded_ids_and_the_count_reach_the_plugin() {
+    let (host, plugin) = radio_plugin().unwrap();
+    let mut artist = ArtistRef::default();
+    artist.id = "ar1".to_owned();
+    artist.name = "Artist One".to_owned();
+    let mut second = ArtistRef::default();
+    second.id = "ar2".to_owned();
+    second.name = "Artist Two".to_owned();
+    let mut album = AlbumRef::default();
+    album.id = "al1".to_owned();
+    album.title = "Album One".to_owned();
+    let mut cover = Artwork::default();
+    cover.url = "https://a.cdn.example.org/cover.jpg".to_owned();
+    cover.width = Some(544);
+    let mut thumbnail = Artwork::default();
+    thumbnail.url = "https://a.cdn.example.org/thumb.jpg".to_owned();
+    thumbnail.height = Some(60);
+    let mut seed = seed("echo");
+    seed.artists = vec![artist, second];
+    seed.album = Some(album);
+    seed.duration = Some(Duration::from_millis(215_999));
+    seed.isrc = Some("FRZ039800212".to_owned());
+    seed.artwork = vec![cover, thumbnail];
+
+    let tracks = host
+        .radio(&plugin, &seed, &["x1".to_owned(), "x2".to_owned()], 7)
+        .outcome
+        .unwrap();
+
+    assert_eq!(tracks.len(), 1);
+    assert_eq!(tracks[0].id, "echoed");
+    // The duration is in milliseconds, rounded down; an absent field arrives absent.
+    assert_eq!(
+        tracks[0].title,
+        "title=Seed;artists=ar1=Artist One,ar2=Artist Two;album=Some(\"al1=Album One\");\
+         duration=Some(215999);isrc=Some(\"FRZ039800212\");\
+         artwork=https://a.cdn.example.org/cover.jpg@Some(544)xNone,\
+         https://a.cdn.example.org/thumb.jpg@NonexSome(60);exclude=x1,x2;count=7"
+    );
+}
+
+#[test]
+fn absent_optional_fields_of_the_seed_arrive_absent() {
+    let (host, plugin) = radio_plugin().unwrap();
+    let tracks = host.radio(&plugin, &seed("echo"), &[], 0).outcome.unwrap();
+    assert_eq!(
+        tracks[0].title,
+        "title=Seed;artists=;album=None;duration=None;isrc=None;artwork=;exclude=;count=0"
+    );
+}
+
+#[test]
+fn a_duration_past_the_contracts_milliseconds_saturates_instead_of_wrapping() {
+    let (host, plugin) = radio_plugin().unwrap();
+    let mut long = seed("echo");
+    long.duration = Some(Duration::MAX);
+    let tracks = host.radio(&plugin, &long, &[], 1).outcome.unwrap();
+    assert!(
+        tracks[0]
+            .title
+            .contains(&format!("duration=Some({})", u64::MAX)),
+        "{}",
+        tracks[0].title
+    );
+}
+
+#[test]
+fn the_tracks_come_back_in_the_plugins_order_with_every_field_read_back() {
+    let (host, plugin) = radio_plugin().unwrap();
+    let tracks = host.radio(&plugin, &seed("count"), &[], 3).outcome.unwrap();
+    assert_eq!(
+        tracks.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+        ["radio-1", "radio-2", "radio-3"]
+    );
+    assert!(tracks.iter().all(|t| t.title == "Seed"));
+    assert_eq!(
+        host.radio(&plugin, &seed("count"), &[], 0).outcome.unwrap(),
+        Vec::<Track>::new()
+    );
+}
+
+#[test]
+fn each_error_of_the_radio_plugin_comes_back_as_itself() {
+    let (host, plugin) = radio_plugin().unwrap();
+    let cases = [
+        ("error:not-found", PluginError::NotFound),
+        ("error:unsupported", PluginError::Unsupported),
+        (
+            "error:rate-limited",
+            PluginError::RateLimited {
+                retry_after: Some(Duration::from_millis(1_500)),
+            },
+        ),
+        (
+            "error:invalid-input",
+            PluginError::InvalidInput("bad seed".to_owned()),
+        ),
+        (
+            "error:upstream",
+            PluginError::Upstream("service down".to_owned()),
+        ),
+    ];
+    for (id, expected) in cases {
+        let failure = host.radio(&plugin, &seed(id), &[], 1).outcome.unwrap_err();
+        assert_eq!(failure, PluginFailure::Plugin(expected), "{id}");
+    }
+}
+
+#[test]
+fn a_plugin_that_does_not_provide_radio_is_not_called_for_it_and_the_other_way_round() {
+    let host = host().unwrap();
+    let search_only = host.install(&fixture("good").unwrap()).unwrap();
+    let call = host.radio(&search_only, &seed("count"), &[], 3);
+    assert_eq!(
+        call.outcome,
+        Err(PluginFailure::NotProvided(Capability::Radio))
+    );
+    assert_eq!(call.report, CallReport::default());
+
+    let radio_only = host.install(&fixture("radio").unwrap()).unwrap();
+    let call = host.search(&radio_only, "daft", &[ItemKind::Track], None);
+    assert_eq!(
+        call.outcome.unwrap_err(),
+        PluginFailure::NotProvided(Capability::Search)
+    );
+    assert_eq!(call.report, CallReport::default());
+}
+
+#[test]
+fn a_radio_call_reaches_the_network_only_through_the_sandbox() {
+    let network = common::ok_network();
+    let host = host_on(network.clone()).unwrap();
+    let plugin = host.install(&fixture("radio").unwrap()).unwrap();
+
+    let call = host.radio(
+        &plugin,
+        &seed("fetch:https://api.example.org/radio"),
+        &[],
+        1,
+    );
+    assert_eq!(call.outcome.unwrap()[0].title, "200:ok");
+    assert_eq!(call.report.requests_sent, 1);
+    assert_eq!(network.requests().len(), 1);
+    assert_eq!(
+        network.requests()[0].0.url.as_str(),
+        "https://api.example.org/radio"
+    );
+
+    // An undeclared host is refused, counted as refused, and never reaches the network.
+    let call = host.radio(&plugin, &seed("fetch:https://evil.org/"), &[], 1);
+    assert_eq!(call.outcome.unwrap()[0].title, "refused-host");
+    assert_eq!(call.report.requests_sent, 0);
+    assert_eq!(call.report.requests_refused, 1);
+    assert_eq!(network.requests().len(), 1);
+}
+
+#[test]
+fn a_radio_answer_is_counted_against_the_output_ceiling() {
+    let (host, plugin) = radio_plugin().unwrap();
+    // `echo` tells the seed's title back, so a long title makes a long answer; the rest of the answer is 80 bytes plus
+    // the element counts, so find the title that lands exactly on the ceiling from what the plugin returned.
+    let measure = |len: usize| {
+        let mut long = seed("echo");
+        long.title = "a".repeat(len);
+        host.radio(&plugin, &long, &[], 0)
+    };
+    let small = measure(1);
+    let base = small.report.output.unwrap().get() - 1;
+    let fits = measure(usize::try_from(MAX_OUTPUT - base).unwrap());
+    assert!(fits.outcome.is_ok(), "{:?}", fits.outcome);
+    assert_eq!(fits.report.output, Some(ByteSize::new(MAX_OUTPUT)));
+    let over = measure(usize::try_from(MAX_OUTPUT - base + 1).unwrap());
+    assert_eq!(
+        over.outcome.unwrap_err(),
+        PluginFailure::OutputTooLarge {
+            size: ByteSize::new(MAX_OUTPUT + 1),
+            limit: ByteSize::new(MAX_OUTPUT),
+        }
+    );
 }

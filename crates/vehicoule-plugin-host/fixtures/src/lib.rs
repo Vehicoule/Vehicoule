@@ -3,12 +3,16 @@
 #[cfg(not(any(
     feature = "extra-import",
     feature = "undeclared-export",
-    feature = "good"
+    feature = "good",
+    feature = "radio"
 )))]
 wit_bindgen::generate!({ path: "../../../wit", world: "vehicoule:plugin/base@0.1.0" });
 
 #[cfg(any(feature = "good", feature = "undeclared-export"))]
 wit_bindgen::generate!({ path: "../../../wit", world: "vehicoule:plugin/search-plugin@0.1.0" });
+
+#[cfg(feature = "radio")]
+wit_bindgen::generate!({ path: "../../../wit", world: "vehicoule:plugin/radio-plugin@0.1.0" });
 
 #[cfg(feature = "extra-import")]
 wit_bindgen::generate!({
@@ -61,6 +65,11 @@ impl Guest for Fixture {
 #[cfg(feature = "good")]
 fn behavior() -> Manifest {
     manifest("good", vec![Capability::Search], hosts())
+}
+
+#[cfg(feature = "radio")]
+fn behavior() -> Manifest {
+    manifest("radio", vec![Capability::Radio], hosts())
 }
 
 #[cfg(feature = "undeclared-export")]
@@ -313,8 +322,87 @@ impl exports::vehicoule::plugin::search::Guest for Fixture {
     }
 }
 
+/// `continuation` does what the seed's id says, so one plugin covers every call the tests make: `echo` (a track that
+/// tells every field of the seed, the excluded ids and the count it received), `count` (as many tracks as asked),
+/// `fetch:URL` (a GET, the track titled after what it returned), `error:KIND`; any other id returns one track titled
+/// after the seed's title.
+#[cfg(feature = "radio")]
+impl exports::vehicoule::plugin::radio::Guest for Fixture {
+    fn continuation(
+        seed: vehicoule::plugin::types::Track,
+        exclude: Vec<String>,
+        count: u32,
+    ) -> Result<Vec<vehicoule::plugin::types::Track>, vehicoule::plugin::types::Error> {
+        use vehicoule::plugin::http::Method;
+        use vehicoule::plugin::types::{Error, Track};
+
+        let track = |id: String, title: String| Track {
+            id,
+            title,
+            artists: Vec::new(),
+            album: None,
+            duration_ms: None,
+            isrc: None,
+            artwork: Vec::new(),
+        };
+
+        match seed.id.as_str() {
+            "echo" => {
+                let artists: Vec<String> = seed
+                    .artists
+                    .iter()
+                    .map(|artist| format!("{}={}", artist.id, artist.name))
+                    .collect();
+                let artwork: Vec<String> = seed
+                    .artwork
+                    .iter()
+                    .map(|picture| {
+                        format!("{}@{:?}x{:?}", picture.url, picture.width, picture.height)
+                    })
+                    .collect();
+                let album = seed
+                    .album
+                    .as_ref()
+                    .map(|album| format!("{}={}", album.id, album.title));
+                Ok(vec![track(
+                    String::from("echoed"),
+                    format!(
+                        "title={};artists={};album={:?};duration={:?};isrc={:?};artwork={};exclude={};count={count}",
+                        seed.title,
+                        artists.join(","),
+                        album,
+                        seed.duration_ms,
+                        seed.isrc,
+                        artwork.join(","),
+                        exclude.join(","),
+                    ),
+                )])
+            }
+            "count" => Ok((1..=count)
+                .map(|n| track(format!("radio-{n}"), seed.title.clone()))
+                .collect()),
+            "error:not-found" => Err(Error::NotFound),
+            "error:unsupported" => Err(Error::Unsupported),
+            "error:rate-limited" => Err(Error::RateLimited(Some(1_500))),
+            "error:invalid-input" => Err(Error::InvalidInput(String::from("bad seed"))),
+            "error:upstream" => Err(Error::Upstream(String::from("service down"))),
+            id if id.starts_with("fetch:") => {
+                let url = id.trim_start_matches("fetch:");
+                let outcome = request(
+                    Method::Get,
+                    url,
+                    vec![(String::from("x-test"), String::from("1"))],
+                    None,
+                );
+                Ok(vec![track(String::from("fetched"), outcome)])
+            }
+            _ => Ok(vec![track(String::from("radio-1"), seed.title)]),
+        }
+    }
+}
+
 /// One request through the host, told as text: `STATUS:BODY` or the error's name.
-#[cfg(any(feature = "good", feature = "undeclared-export"))]
+#[cfg(any(feature = "good", feature = "undeclared-export", feature = "radio"))]
 fn request(
     method: vehicoule::plugin::http::Method,
     url: &str,
