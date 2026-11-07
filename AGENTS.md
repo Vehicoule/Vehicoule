@@ -116,6 +116,8 @@ and report what you ran.
 - New public structs are `#[non_exhaustive]` and implement `Default` when a default makes sense. Public enums are
   `#[non_exhaustive]`.
 - States are enums, never several booleans. Invalid states are unrepresentable.
+- No text shown to the user is written in code: each one is a Fluent message in the shell's language files, read
+  through a typed key ([ADR 0008](docs/adr/0008-app-text-in-translation-files.md)).
 - A pull request that fixes a bug adds a test that fails without the fix, named `regression_<issue>_<what>` with a
   link to the issue above it ([ADR 0012](docs/adr/0012-one-regression-test-per-fixed-bug.md)).
 - Durations and positions are typed (`std::time::Duration` or a newtype), never a bare integer or float in public API.

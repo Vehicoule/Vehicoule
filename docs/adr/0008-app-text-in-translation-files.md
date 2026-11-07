@@ -1,6 +1,6 @@
 # 0008. Keep every text the app shows in translation files from the start
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-06
 - Deciders: the user
 
@@ -33,7 +33,7 @@ part that shows text, does not exist yet; this is the cheapest moment to set the
 
 ## Decision
 
-Recommended: option 2, Fluent.
+Option 2, Fluent. The user chose it on 2026-11-07.
 
 - No text shown to the user is written in the shell's code: each one is a message in `fr.ftl`, read through a typed
   key, so a missing key does not compile.
@@ -46,6 +46,6 @@ Recommended: option 2, Fluent.
 ## Consequences
 
 - The shell's first pull request brings `fluent-bundle`, the typed keys and the CI check; AGENTS.md gains the rule
-  "no user-visible text in code" when this ADR is accepted.
+  "no user-visible text in code".
 - Adding a language is adding a file and passing the CI check, with no change to the code.
 - Writing a screen costs a key per text, even in French only.
