@@ -264,6 +264,7 @@ jobs:
           workspaces: |
             crates/vehicoule-plugin-host/fixtures -> target
             crates/vehicoule-plugin-host/fuzz -> target
+            crates/vehicoule-core/fuzz -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install wasm-tools and cargo-fuzz
         working-directory: .
@@ -286,6 +287,17 @@ jobs:
         run: cargo fuzz run host_pattern -- -seed=1 -runs=200000
       - name: Fuzz manifests
         run: cargo fuzz run manifest -- -seed=1 -runs=200000
+      # ADR 0015: the core's state machines, driven by sequences of operations, on the same nightly. 200,000 inputs of
+      # `queue` took 23 s, then 79 s, locally (shared container, 4 cores, cargo-fuzz's release profile, two runs).
+      - name: Check the format of the core's targets
+        working-directory: crates/vehicoule-core/fuzz
+        run: cargo fmt --check
+      - name: Clippy on the core's targets
+        working-directory: crates/vehicoule-core/fuzz
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Fuzz the queue
+        working-directory: crates/vehicoule-core/fuzz
+        run: cargo fuzz run queue -- -seed=1 -runs=200000
 
   deny:
     name: deny
@@ -297,11 +309,15 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check
-      # The fuzz targets are a workspace of their own (ADR 0013), checked with the same `deny.toml`.
+      # The fuzz targets are workspaces of their own (ADR 0013, ADR 0015), checked with the same `deny.toml`.
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check
           manifest-path: crates/vehicoule-plugin-host/fuzz/Cargo.toml
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check
+          manifest-path: crates/vehicoule-core/fuzz/Cargo.toml
 
   # The plugin contract (docs/plugin-host-spec.md, section 8) must parse as a WIT package.
   wit:

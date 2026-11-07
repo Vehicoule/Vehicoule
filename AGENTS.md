@@ -77,6 +77,7 @@ cargo test --workspace --locked
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --locked
 cargo deny check
 cargo deny --manifest-path crates/vehicoule-plugin-host/fuzz/Cargo.toml check
+cargo deny --manifest-path crates/vehicoule-core/fuzz/Cargo.toml check
 cargo mutants --workspace --cargo-arg=--locked   # cargo-mutants 27.1.0
 wasm-tools component wit wit/ > /dev/null       # wasm-tools 1.263.0, the plugin contract parses
 scripts/test-check-wit-compat.sh                 # the contract's version check passes its cases
@@ -91,6 +92,8 @@ cargo fuzz build
 cargo fuzz run install "$FIXTURES" -- -runs=0
 cargo fuzz run host_pattern -- -seed=1 -runs=200000
 cargo fuzz run manifest -- -seed=1 -runs=200000
+# In crates/vehicoule-core/fuzz, on the same nightly (ADR 0015):
+cargo fuzz run queue -- -seed=1 -runs=200000
 ```
 
 Kani proofs live in `#[cfg(kani)]` modules beside the code they prove ([ADR 0004](docs/adr/0004-verification.md)). The
@@ -121,6 +124,8 @@ and report what you ran.
 - States are enums, never several booleans. Invalid states are unrepresentable.
 - No text shown to the user is written in code: each one is a Fluent message in the shell's language files, read
   through a typed key ([ADR 0008](docs/adr/0008-app-text-in-translation-files.md)).
+- A core state machine, or a part that reads data from outside the app, comes with its fuzz target in the pull
+  request that adds it ([ADR 0015](docs/adr/0015-fuzz-the-cores-state-machines.md)).
 - A pull request that fixes a bug adds a test that fails without the fix, named `regression_<issue>_<what>` with a
   link to the issue above it ([ADR 0012](docs/adr/0012-one-regression-test-per-fixed-bug.md)).
 - Durations and positions are typed (`std::time::Duration` or a newtype), never a bare integer or float in public API.

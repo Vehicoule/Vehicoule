@@ -1,0 +1,28 @@
+# Fuzz targets for the core's state machines (ADR 0015), run with cargo-fuzz on the nightly toolchain that
+# `rust-toolchain.toml` in this directory pins.
+# Its own workspace: it needs nightly and libFuzzer, is never shipped, and must not join the app's dependency graph.
+[workspace]
+
+[package]
+name = "vehicoule-core-fuzz"
+description = "Fuzz targets for the core: sequences of operations on its state machines"
+version = "0.0.0"
+edition = "2024"
+license = "GPL-3.0-only"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+# libFuzzer's runtime, which is C++, and the `fuzz_target!` entry point. The user agreed to this C++ dependency on
+# 2026-11-07, for fuzzing only (ADR 0013, ADR 0015).
+libfuzzer-sys = "=0.4.13"
+vehicoule-core = { path = "..", version = "0.0.0", features = ["fuzzing"] }
+
+[[bin]]
+name = "queue"
+path = "fuzz_targets/queue.rs"
+test = false
+doc = false
+bench = false
