@@ -93,7 +93,7 @@ and report what you ran.
 | `crates/vehicoule-core/` | The core: app state, queue, player model. No UI, no I/O |
 | `wit/` | The plugin contract, in WIT ([spec](docs/plugin-host-spec.md)) |
 | `docs/adr/` | Decisions, numbered, one per file ([template](docs/adr/0000-template.md)) |
-| `docs/` | Specs and references; [`core-playback-spec.md`](docs/core-playback-spec.md): sessions, queue, player model |
+| `docs/` | Specs and references; [`core-playback-spec.md`](docs/core-playback-spec.md): sessions, queue, player model; [`plugin-providers.md`](docs/plugin-providers.md): which plugin provides what |
 | `reference/` | Vendored sources of truth, pinned, never edited by hand |
 | `.claude/skills/` | Vendored skills for coding agents, pinned |
 
