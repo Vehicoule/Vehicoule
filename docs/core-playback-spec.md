@@ -152,27 +152,31 @@ The resolution of the next entry for preloading (section 3, Preloading) is not g
 it for when that entry starts, and comes with the preloading pull request.
 
 Commands: `Resolve { entry, request }`, `Load { source, from }`, `Play`, `Pause`, `Seek { position }`, `Stop`.
+`Load` opens the source and plays it from `from` as soon as it can: no `Play` follows it, and the platform reports
+`Playing` once it plays.
 
 | State | Event | Next state | Commands |
 |---|---|---|---|
 | any | `Start { e }` | `Resolving { e, 0, r }` | `Stop` when a source was loaded (`Loading`, `Playing`, `Paused`, `Buffering`), then `Resolve { e, r }` |
-| `Resolving { e, from, r }` | `Resolved { r, s, d }` | `Loading { e, s, from, d }` | `Load { s, from }` |
+| `Resolving { e, from, r }` | `Resolved { r, s, d }` | `Loading { e, s, min(from, d), d }` | `Load { s, min(from, d) }` |
 | `Loading { e, .. }` | `Playing { e, a }` | `Playing { e, a, d }` | |
 | `Playing { e, .. }` or `Buffering { e, .. }` | `Playing { e, a }` | `Playing { e, a, d }` | |
 | `Playing { e, a, d }` | `Pause` | `Paused { e, a at now, d }` | `Pause` |
 | `Buffering { e, p, d }` | `Pause` | `Paused { e, p, d }` | `Pause` |
 | `Paused { e, p, d }` | `Resume` | `Buffering { e, p, d }` | `Play` |
-| `Paused { e, .. }` | `Paused { e, p }` | `Paused { e, p, d }` | |
-| `Playing { e, .. }` | `Buffering { e, p }` | `Buffering { e, p, d }` | |
-| `Playing { e, .. }` or `Buffering { e, .. }` | `Seek { p }` | `Buffering { e, p, d }` | `Seek { p }` |
-| `Paused { e, .. }` | `Seek { p }` | `Paused { e, p, d }` | `Seek { p }` |
+| `Paused { e, .. }` | `Paused { e, p }` | `Paused { e, min(p, d), d }` | |
+| `Playing { e, .. }` | `Buffering { e, p }` | `Buffering { e, min(p, d), d }` | |
+| `Playing { e, .. }` or `Buffering { e, .. }` | `Seek { p }` | `Buffering { e, min(p, d), d }` | `Seek { min(p, d) }` |
+| `Paused { e, .. }` | `Seek { p }` | `Paused { e, min(p, d), d }` | `Seek { min(p, d) }` |
 | `Stopped { e, .. }` | `Seek { p }` | `Stopped { e, p }` | |
 | `Resolving`, `Loading`, `Playing`, `Paused` or `Buffering`, on `e` | `Stop` | `Stopped { e, position }` | `Stop` when a source was loaded |
 | `Stopped { e, p }` | `Resume` | `Resolving { e, p, r }` | `Resolve { e, r }` |
 | `Playing { e, .. }` or `Buffering { e, .. }` | `Ended { e }` | see below | |
 
 - `r` is a new request number, different from every request still in flight. `d` is the duration the state had,
-  carried along. `a at now` is the anchor's position at `now`, clamped to `d` (Position, below).
+  carried along. `a at now` is the anchor's position at `now`, clamped to `d` (Position, below). `min(p, d)` is `p`
+  clamped to `d`, and `p` itself when the duration is unknown: the player never sends or shows a position beyond the
+  known duration. `Stopped` and `Resolving` know no duration, so a position kept there is clamped by `Resolved`.
   `position` in `Stop` is the position of the state left: `a at now` from `Playing`, the kept position from `Paused`
   and `Buffering`, `from` from `Resolving` and `Loading`. `Stop` in `WaitingForNetwork`, which keeps no position, comes
   with that state's pull request.
