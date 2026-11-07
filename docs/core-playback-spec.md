@@ -104,18 +104,20 @@ snapshots, on every platform. That is what makes the black box replay and the Ka
 
 ```
 Idle
-Resolving { entry, from }            waiting for the resolver to give a playable source
-Loading   { entry, source, from }    the platform player is opening it, to play from `from`
-Playing   { entry, anchor }
-Paused    { entry, position }
-Buffering { entry, position }
-Stopped   { entry, position }        after an explicit stop; resumable
+Resolving { entry, from }                      waiting for the resolver to give a playable source
+Loading   { entry, source, from, duration }    the platform player is opening it, to play from `from`
+Playing   { entry, anchor, duration }
+Paused    { entry, position, duration }
+Buffering { entry, position, duration }
+Stopped   { entry, position }                  after an explicit stop; resumable
 WaitingForNetwork { entry }          offline, nothing downloaded ahead (section 3, Offline)
 ```
 
 Errors are not a resting state: a failure moves the session on (section 5) and is reported in the snapshot.
 
 `from` is the position playback starts at: zero for a new entry, the kept position when a stopped entry resumes.
+`duration` is the media's duration when the resolver knew it, kept from the resolution while the source is loaded, so
+that positions are clamped to it (Position, below).
 
 ### Events and transitions
 
@@ -131,29 +133,31 @@ Events:
 - From the platform player, each naming the entry it is about: `Playing { entry, anchor }` (it plays from the anchor:
   start, resume, seek done, rate change, end of buffering, discontinuity), `Paused { entry, position }`,
   `Buffering { entry, position }`, `Ended { entry }`. A report or a resolution about another entry than the player's is
-  late, and changes nothing.
+  late, and changes nothing. The resolution of the next entry for preloading (section 3, Preloading) is not given to
+  the player: the session keeps it for when that entry starts, and comes with the preloading pull request.
 
 Commands: `Resolve { entry }`, `Load { source, from }`, `Play`, `Pause`, `Seek { position }`, `Stop`.
 
 | State | Event | Next state | Commands |
 |---|---|---|---|
 | any | `Start { e }` | `Resolving { e, 0 }` | `Stop` when a source was loaded (`Loading`, `Playing`, `Paused`, `Buffering`), then `Resolve { e }` |
-| `Resolving { e, from }` | `Resolved { e, s, d }` | `Loading { e, s, from }` | `Load { s, from }` |
-| `Loading { e, .. }` | `Playing { e, a }` | `Playing { e, a }` | |
-| `Playing { e, .. }` or `Buffering { e, .. }` | `Playing { e, a }` | `Playing { e, a }` | |
-| `Playing { e, a }` | `Pause` | `Paused { e, a at now }` | `Pause` |
-| `Buffering { e, p }` | `Pause` | `Paused { e, p }` | `Pause` |
-| `Paused { e, p }` | `Resume` | `Buffering { e, p }` | `Play` |
-| `Paused { e, .. }` | `Paused { e, p }` | `Paused { e, p }` | |
-| `Playing { e, .. }` | `Buffering { e, p }` | `Buffering { e, p }` | |
-| `Playing { e, .. }` or `Buffering { e, .. }` | `Seek { p }` | `Buffering { e, p }` | `Seek { p }` |
-| `Paused { e, .. }` | `Seek { p }` | `Paused { e, p }` | `Seek { p }` |
+| `Resolving { e, from }` | `Resolved { e, s, d }` | `Loading { e, s, from, d }` | `Load { s, from }` |
+| `Loading { e, .. }` | `Playing { e, a }` | `Playing { e, a, d }` | |
+| `Playing { e, .. }` or `Buffering { e, .. }` | `Playing { e, a }` | `Playing { e, a, d }` | |
+| `Playing { e, a, d }` | `Pause` | `Paused { e, a at now, d }` | `Pause` |
+| `Buffering { e, p, d }` | `Pause` | `Paused { e, p, d }` | `Pause` |
+| `Paused { e, p, d }` | `Resume` | `Buffering { e, p, d }` | `Play` |
+| `Paused { e, .. }` | `Paused { e, p }` | `Paused { e, p, d }` | |
+| `Playing { e, .. }` | `Buffering { e, p }` | `Buffering { e, p, d }` | |
+| `Playing { e, .. }` or `Buffering { e, .. }` | `Seek { p }` | `Buffering { e, p, d }` | `Seek { p }` |
+| `Paused { e, .. }` | `Seek { p }` | `Paused { e, p, d }` | `Seek { p }` |
 | `Stopped { e, .. }` | `Seek { p }` | `Stopped { e, p }` | |
 | any with an entry, but `Stopped` | `Stop` | `Stopped { e, position }` | `Stop` when a source was loaded |
 | `Stopped { e, p }` | `Resume` | `Resolving { e, p }` | `Resolve { e }` |
 | `Playing { e, .. }` or `Buffering { e, .. }` | `Ended { e }` | see below | |
 
-- `a at now` is the anchor's position at `now`, clamped to the duration the resolver gave (section 4, Position).
+- `d` is the duration the state had, carried along. `a at now` is the anchor's position at `now`, clamped to `d`
+  (Position, below).
   `position` in `Stop` is the position of the state left: `a at now` from `Playing`, the kept position from `Paused`
   and `Buffering`, `from` from `Resolving` and `Loading`.
 - `Buffering` is also where the player waits after `Resume` and `Seek`, until the platform reports `Playing`: section 5
