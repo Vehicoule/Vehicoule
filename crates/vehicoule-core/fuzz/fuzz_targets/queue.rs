@@ -327,7 +327,17 @@ fn step(
         }
     }
 
-    // Only `set_repeat` changes the repeat mode, and only `shuffle` and `unshuffle` turn the shuffle on or off.
+    // What no operation changes besides its own documented effect. An entry is never edited: one that is still in the
+    // queue keeps its media and origin. Only `replace` and `clear` change the source, only `set_repeat` the repeat
+    // mode, and only `shuffle` and `unshuffle` turn the shuffle on or off.
+    for entry in queue.entries() {
+        if let Some(old) = before.entry(entry.id()) {
+            assert_eq!(entry, old);
+        }
+    }
+    if !matches!(operation, 0 | 5) {
+        assert_eq!(queue.source(), before.source());
+    }
     if operation != 6 {
         assert_eq!(queue.repeat(), before.repeat());
     }
