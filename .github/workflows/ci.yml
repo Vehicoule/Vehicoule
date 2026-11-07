@@ -299,6 +299,38 @@ jobs:
         working-directory: crates/vehicoule-core/fuzz
         run: cargo fuzz run queue -- -seed=1 -runs=200000
 
+  # ADR 0016: the core's benchmarks count instructions under Callgrind, which does not depend on the runner's load,
+  # and each one fails above its ceiling. The runner's image is pinned so that Valgrind's version stays the same.
+  # Locally (shared container, Valgrind 3.22.0, one run), the 19 benchmarks took 9 s after the build.
+  bench:
+    name: bench
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: crates/vehicoule-core/bench
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: crates/vehicoule-core/bench -> target
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install Valgrind and gungraun-runner
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y valgrind
+          valgrind --version
+          cargo install gungraun-runner --version 0.20.0 --locked
+      - name: Format
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Run the benchmarks
+        run: cargo bench --locked
+
   deny:
     name: deny
     runs-on: ubuntu-latest
@@ -309,7 +341,8 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check
-      # The fuzz targets are workspaces of their own (ADR 0013, ADR 0015), checked with the same `deny.toml`.
+      # The fuzz targets and the benchmarks are workspaces of their own (ADR 0013, ADR 0015, ADR 0016), checked with
+      # the same `deny.toml`.
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check
@@ -318,6 +351,10 @@ jobs:
         with:
           command: check
           manifest-path: crates/vehicoule-core/fuzz/Cargo.toml
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check
+          manifest-path: crates/vehicoule-core/bench/Cargo.toml
 
   # The plugin contract (docs/plugin-host-spec.md, section 8) must parse as a WIT package.
   wit:

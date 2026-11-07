@@ -23,3 +23,4 @@ Only the user moves an ADR from Proposed to Accepted.
 | [0013](0013-fuzz-the-plugin-hosts-untrusted-inputs.md) | The plugin host's untrusted inputs are fuzzed with cargo-fuzz and libFuzzer | Accepted |
 | [0014](0014-prove-the-plugin-host-checks-with-kani.md) | The plugin host's sandbox checks are proved with Kani, written as byte loops | Accepted |
 | [0015](0015-fuzz-the-cores-state-machines.md) | The core's state machines are fuzzed with sequences of operations | Accepted |
+| [0016](0016-count-the-cores-instructions-with-callgrind.md) | The core's operations are benchmarked by instruction count, each under a ceiling | Proposed |

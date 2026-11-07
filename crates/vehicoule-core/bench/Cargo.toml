@@ -1,0 +1,22 @@
+# Benchmarks of the core, counted by Callgrind through gungraun (ADR 0016). Run with `cargo bench` on Linux, with
+# Valgrind and `gungraun-runner` installed at the version below.
+# Its own workspace: it is never shipped, and gungraun must not join the app's dependency graph.
+[workspace]
+
+[package]
+name = "vehicoule-core-bench"
+description = "Benchmarks of the core: instruction counts of its state machines' operations"
+version = "0.0.0"
+edition = "2024"
+license = "GPL-3.0-only"
+publish = false
+
+[dev-dependencies]
+# The benchmark harness, formerly iai-callgrind. The `gungraun-runner` binary that runs the benchmarks must be
+# installed at the same version.
+gungraun = "=0.20.0"
+vehicoule-core = { path = "..", version = "0.0.0" }
+
+[[bench]]
+name = "queue"
+harness = false
