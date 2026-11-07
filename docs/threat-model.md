@@ -36,6 +36,7 @@ test in that list is a gap, not a defence. Until a listed test runs in CI, its d
 | A plugin crashes the app, or corrupts the next call | Traps become a typed failure; a fresh store and instance per call (spec §3, §7) | Must-happen 3, must-never 4 |
 | A plugin keeps user state between calls to track the user | Nothing survives a call (spec §3) | Must-never 4 |
 | A plugin is so large that compiling it exhausts the device | Size ceiling checked before parsing (spec §3, §6) | Must-never 8 |
+| A plugin under the size ceiling still makes the compiler exhaust time or memory | Compilation on a host thread; fuel and store limits do not apply to it, so only the size ceiling bounds it, set from recorded compile time and memory (spec §3, §9) | None yet: gap G6 |
 | A plugin's manifest lies about what it provides | Manifest checked against the component's exports (spec §4) | Must-never 3 |
 | A plugin changes its declared hosts after the user agreed | The stored manifest, not a later `describe`, is enforced (spec §3) | None yet: gap G5 |
 | A plugin's log text is shown to the user as the app's own words | Logs are bounded, tagged, never shown as app text (spec §5) | None yet: gap G5 |
@@ -61,6 +62,7 @@ These follow from what a plugin is for; the user should know them, not be protec
 | G3. Side channels between plugins | Two plugins in one process could in principle observe each other through timing | Not measured; calls are sequential per store (spec §1). Review when plugins run in parallel |
 | G4. Supply chain of the plugins repositories | A plugin is only as safe as its own CI | Same rules as here for `vehicoule-plugins` and `vehicoule-plugins-extra`: pinned actions, locked dependencies, `cargo deny` |
 | G5. Two defences of section 3 have no test in the spec | A defence with no test is not shown to hold (AGENTS.md: CI is the only truth) | Add the tests to the spec with the edge that stores manifests and shows logs |
+| G6. Compiling an accepted plugin has no measured bound | Must-never 8 only shows that bytes over the ceiling are refused; the compile time and memory of bytes under it are not measured yet, so the ceiling is not shown to bound them | Record compile time and memory per plugin (spec §9), set the ceiling from them in an ADR, and test a plugin at the ceiling against that bound |
 
 ## 6. Keeping this file true
 
