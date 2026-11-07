@@ -13,6 +13,7 @@ mkdir -p "$out"
 
 features=(
   good
+  radio
   extra-import
   endless-loop
   memory-bomb

@@ -9,9 +9,12 @@ use std::time::Duration;
 use thiserror::Error;
 
 use crate::bindings::base::vehicoule::plugin::types;
+use crate::bindings::radio::RadioPluginPre;
 use crate::bindings::search::SearchPluginPre;
-use crate::media::{OutputSize, output_bytes};
-use crate::{ByteSize, Capability, Fuel, InstalledPlugin, ItemKind, LogEntry, Page, PluginHost};
+use crate::media::{OutputSize, convert, output_bytes};
+use crate::{
+    ByteSize, Capability, Fuel, InstalledPlugin, ItemKind, LogEntry, Page, PluginHost, Track,
+};
 
 /// An error the plugin itself returned, as the contract names them.
 #[non_exhaustive]
@@ -178,6 +181,32 @@ impl PluginHost {
                 .call_suggest(store, prefix)
         });
         self.bounded(answer, report)
+    }
+
+    /// Up to `count` tracks that continue from `seed`, in the plugin's order: the plugin's radio.
+    ///
+    /// `seed` may come from another plugin: the plugin finds its own match for it. `exclude` holds ids the plugin must
+    /// not return, which are its own ids. The host passes both on as they are and does not check what comes back
+    /// against them, nor against `count`: the core decides what to do with a list that is longer than asked or
+    /// repeats an excluded id.
+    ///
+    /// The outcome is a [`PluginFailure`] as for [`PluginHost::search`].
+    #[must_use]
+    pub fn radio(
+        &self,
+        plugin: &InstalledPlugin,
+        seed: &Track,
+        exclude: &[String],
+        count: u32,
+    ) -> Reported<Vec<Track>> {
+        let seed = types::Track::from(seed);
+        let (answer, report) = self.call(plugin, Capability::Radio, |store, pre| {
+            let instance = RadioPluginPre::new(pre.clone())?.instantiate(&mut *store)?;
+            instance
+                .vehicoule_plugin_radio()
+                .call_continuation(store, &seed, exclude, count)
+        });
+        self.bounded(answer.map(|answer| answer.map(convert)), report)
     }
 
     /// The plugin's answer, or the failure it names, once its size is checked against the output budget and written
