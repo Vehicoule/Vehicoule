@@ -48,9 +48,18 @@ jobs:
           RUSTDOCFLAGS: -D warnings
 
   # ADR 0004: a mutant that survives the tests means a test that asserts too little, and fails the check.
-  mutants:
-    name: mutants
+  # The mutants are split into four shards that run side by side, each on its own runner: one runner took 10 to 19
+  # minutes for the whole set. `--in-place` mutates this checkout instead of a copy, so the build reuses the `target/`
+  # that rust-cache restored (a copy starts from an empty `target/`). Every shard runs the same command with the same
+  # denominator, so together they test every mutant exactly once (cargo-mutants' `--shard k/n`).
+  mutants-shard:
+    name: mutants shard ${{ matrix.shard }}/4
     runs-on: ubuntu-latest
+    strategy:
+      # One failing shard must not hide the mutants the others miss.
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install the pinned toolchain
@@ -63,9 +72,24 @@ jobs:
       - name: Build the plugin host's test plugins
         run: scripts/build-plugin-fixtures.sh "$RUNNER_TEMP/plugin-fixtures"
       - name: Mutation testing
-        run: cargo mutants --workspace --cargo-arg=--locked
+        run: cargo mutants --workspace --cargo-arg=--locked --in-place --shard ${{ matrix.shard }}/4
         env:
           VEHICOULE_PLUGIN_FIXTURES: ${{ runner.temp }}/plugin-fixtures
+
+  # The required check: green only when every shard is. `always()` makes it run, and fail, when a shard fails or is
+  # cancelled; without it, it would be skipped, and a skipped required check counts as passed.
+  mutants:
+    name: mutants
+    needs: mutants-shard
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every shard passed
+        env:
+          RESULT: ${{ needs.mutants-shard.result }}
+        run: |
+          echo "The shards' result: $RESULT"
+          test "$RESULT" = success
 
   # ADR 0004: the core's invariants, proved by Kani on every pull request. The harnesses are split across shards,
   # since one job runs them one after the other.
