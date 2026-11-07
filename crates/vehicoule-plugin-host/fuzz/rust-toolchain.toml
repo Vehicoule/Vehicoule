@@ -1,0 +1,6 @@
+[toolchain]
+# cargo-fuzz instruments the code with flags only nightly accepts (ADR 0013). Pinned like the stable toolchain: a
+# newer nightly is a pull request of its own, with CI green.
+channel = "nightly-2026-11-01"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
