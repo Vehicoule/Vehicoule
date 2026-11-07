@@ -163,9 +163,7 @@ fn append(mut queue: Queue<u32>) -> Queue<u32> {
 
 #[library_benchmark]
 #[bench::unshuffled(args = (false), setup = large, config = measured(28_037))]
-// Shuffled, `play_order` looks each id of the shuffled order up among the entries, one by one: its count grows with
-// the square of the queue's length.
-#[bench::shuffled(args = (true), setup = large, config = measured(250_199_586))]
+#[bench::shuffled(args = (true), setup = large, config = measured(1_732_067))]
 fn play_order(queue: Queue<u32>) -> usize {
     black_box(queue.play_order()).len()
 }
