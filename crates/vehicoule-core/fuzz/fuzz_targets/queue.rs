@@ -163,6 +163,13 @@ fn step(
                 .and_then(|current| before_ids.iter().position(|id| *id == current))
                 .map_or(0, |position| position + 1);
             assert_eq!(after.get(at..at + added.len()), Some(added.as_slice()));
+            // The same holds in the play order, which differs from the source order when the queue is shuffled.
+            let mut expected_play = play_ids(&before);
+            let play_at = before_current
+                .and_then(|current| expected_play.iter().position(|id| *id == current))
+                .map_or(0, |position| position + 1);
+            expected_play.splice(play_at..play_at, added.iter().copied());
+            assert_eq!(play_ids(queue), expected_play);
             assert_eq!(current_id(queue), before_current);
         }
         2 => {
