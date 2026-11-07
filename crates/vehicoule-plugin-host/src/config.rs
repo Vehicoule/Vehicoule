@@ -59,6 +59,33 @@ impl Fuel {
     }
 }
 
+/// A number of ticks of the host's [`Ticker`](crate::Ticker), the wall-time budget of a call.
+///
+/// The edge ticks at a period it chooses; a call given `n` ticks ends at the `n`-th tick after it started, so it ran
+/// between `n - 1` and `n` periods.
+///
+/// ```
+/// use vehicoule_plugin_host::Ticks;
+///
+/// assert_eq!(Ticks::new(20).get(), 20);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Ticks(u64);
+
+impl Ticks {
+    /// `count` ticks.
+    #[must_use]
+    pub const fn new(count: u64) -> Self {
+        Self(count)
+    }
+
+    /// The number of ticks.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
 /// The HTTP budget of one call.
 ///
 /// ```
@@ -99,11 +126,12 @@ impl HttpBudget {
 ///
 /// ```
 /// use std::time::Duration;
-/// use vehicoule_plugin_host::{ByteSize, Fuel, HostConfig, HttpBudget};
+/// use vehicoule_plugin_host::{ByteSize, Fuel, HostConfig, HttpBudget, Ticks};
 ///
 /// let config = HostConfig::new(
 ///     ByteSize::new(8 << 20),
 ///     Fuel::new(50_000_000),
+///     Ticks::new(20),
 ///     ByteSize::new(64 << 20),
 ///     ByteSize::new(1 << 20),
 ///     HttpBudget::new(10, ByteSize::new(2 << 20), Duration::from_secs(10)),
@@ -118,6 +146,9 @@ pub struct HostConfig {
     pub max_plugin_size: ByteSize,
     /// The fuel given to each call into a plugin, `describe` included.
     pub fuel_per_call: Fuel,
+    /// The wall time each call into a plugin may last, `describe` included, in ticks of the host's
+    /// [`Ticker`](crate::Ticker). It ends a call blocked where fuel does not run out, such as a slow request.
+    pub wall_time: Ticks,
     /// The ceiling on the bytes a call holds in all of its linear memories and tables together.
     pub max_memory: ByteSize,
     /// The ceiling on the size of what a call returns: the bytes of every string in the value, plus one for every
@@ -133,6 +164,7 @@ impl HostConfig {
     pub const fn new(
         max_plugin_size: ByteSize,
         fuel_per_call: Fuel,
+        wall_time: Ticks,
         max_memory: ByteSize,
         max_output: ByteSize,
         http: HttpBudget,
@@ -140,6 +172,7 @@ impl HostConfig {
         Self {
             max_plugin_size,
             fuel_per_call,
+            wall_time,
             max_memory,
             max_output,
             http,

@@ -57,6 +57,9 @@ pub enum InstallError {
     /// `describe` ran out of fuel.
     #[error("the plugin ran out of fuel")]
     FuelExhausted,
+    /// `describe` ran past its wall time.
+    #[error("the plugin ran past its wall time")]
+    WallTime,
     /// The plugin asked for more memory than the ceiling.
     #[error("the plugin went over its memory ceiling")]
     MemoryLimit,
@@ -309,7 +312,7 @@ impl PluginHost {
     /// use std::time::Duration;
     /// use vehicoule_plugin_host::{
     ///     ByteSize, Fuel, HostConfig, HttpBudget, HttpRequest, HttpResponse, Network, NetworkError, PluginHost,
-    ///     RequestLimits,
+    ///     RequestLimits, Ticks,
     /// };
     ///
     /// struct Offline;
@@ -323,6 +326,7 @@ impl PluginHost {
     /// let config = HostConfig::new(
     ///     ByteSize::new(1 << 20),
     ///     Fuel::new(1_000_000),
+    ///     Ticks::new(20),
     ///     ByteSize::new(16 << 20),
     ///     ByteSize::new(1 << 20),
     ///     HttpBudget::new(10, ByteSize::new(1 << 20), Duration::from_secs(10)),
@@ -332,6 +336,7 @@ impl PluginHost {
     pub fn new(config: HostConfig, network: Arc<dyn Network>) -> Result<Self, HostError> {
         let mut wasm = wasmtime::Config::new();
         wasm.consume_fuel(true);
+        wasm.epoch_interruption(true);
         let engine = Engine::new(&wasm).map_err(|e| HostError::Engine(e.to_string()))?;
         let mut linker = Linker::new(&engine);
         base::Base::add_to_linker::<CallState, HasSelf<CallState>>(&mut linker, |state| state)
@@ -398,6 +403,42 @@ impl PluginHost {
         Ok(InstalledPlugin { manifest, pre })
     }
 
+    /// The clock of the calls' wall time, for the edge to tick.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use std::time::Duration;
+    /// # use vehicoule_plugin_host::{
+    /// #     ByteSize, Fuel, HostConfig, HttpBudget, HttpRequest, HttpResponse, Network, NetworkError, PluginHost,
+    /// #     RequestLimits, Ticks,
+    /// # };
+    /// # struct Offline;
+    /// # impl Network for Offline {
+    /// #     fn fetch(&self, _request: &HttpRequest, _limits: RequestLimits) -> Result<HttpResponse, NetworkError> {
+    /// #         Err(NetworkError::Transport("offline".to_owned()))
+    /// #     }
+    /// # }
+    /// # let config = HostConfig::new(
+    /// #     ByteSize::new(1 << 20),
+    /// #     Fuel::new(1_000_000),
+    /// #     Ticks::new(20),
+    /// #     ByteSize::new(16 << 20),
+    /// #     ByteSize::new(1 << 20),
+    /// #     HttpBudget::new(10, ByteSize::new(1 << 20), Duration::from_secs(10)),
+    /// # );
+    /// let host = PluginHost::new(config, Arc::new(Offline))?;
+    /// let ticker = host.ticker();
+    /// // The edge calls this from its own timer, at the period it chose for `Ticks`.
+    /// std::thread::spawn(move || ticker.tick());
+    /// # Ok::<(), vehicoule_plugin_host::HostError>(())
+    /// ```
+    #[must_use]
+    pub fn ticker(&self) -> Ticker {
+        Ticker {
+            engine: self.engine.clone(),
+        }
+    }
+
     /// The budgets this host enforces.
     pub(crate) fn config(&self) -> &HostConfig {
         &self.config
@@ -424,7 +465,7 @@ impl PluginHost {
         call(&mut store, &plugin.pre).map_err(|e| stop(&e, &store).into())
     }
 
-    /// A store for one call: its own memory ceiling, its own fuel and its own network grant.
+    /// A store for one call: its own memory ceiling, its own fuel, its own wall time and its own network grant.
     fn store(&self, http: Http) -> wasmtime::Result<Store<CallState>> {
         let mut store = Store::new(
             &self.engine,
@@ -436,6 +477,8 @@ impl PluginHost {
         );
         store.limiter(|state| &mut state.limiter);
         store.set_fuel(self.config.fuel_per_call.get())?;
+        store.set_epoch_deadline(self.config.wall_time.get());
+        store.epoch_deadline_trap();
         Ok(store)
     }
 
@@ -451,6 +494,22 @@ impl PluginHost {
             .and_then(|pre| pre.instantiate(&mut store))
             .and_then(|plugin| plugin.vehicoule_plugin_plugin().call_describe(&mut store))
             .map_err(|e| stop(&e, &store).into())
+    }
+}
+
+/// Ticks the wall time of every call of the [`PluginHost`] it came from (section 6).
+///
+/// Cheap to clone and to send to another thread; a tick is one atomic increment. A call blocked in a host function,
+/// such as a request, sees the ticks when it returns to the plugin's code.
+#[derive(Clone, Debug)]
+pub struct Ticker {
+    engine: Engine,
+}
+
+impl Ticker {
+    /// One tick: every call that has run for its [`HostConfig::wall_time`] ticks now ends with a wall-time failure.
+    pub fn tick(&self) {
+        self.engine.increment_epoch();
     }
 }
 
@@ -473,6 +532,7 @@ impl OutputSize for base::exports::vehicoule::plugin::plugin::Manifest {
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Stop {
     FuelExhausted,
+    WallTime,
     MemoryLimit,
     Http(HttpStop),
     Trap(String),
@@ -483,6 +543,7 @@ impl From<Stop> for InstallError {
     fn from(stop: Stop) -> Self {
         match stop {
             Stop::FuelExhausted => Self::FuelExhausted,
+            Stop::WallTime => Self::WallTime,
             Stop::MemoryLimit => Self::MemoryLimit,
             // Install refuses every request before it is counted or sent, so no HTTP budget can end `describe`.
             Stop::Http(stop) => {
@@ -498,6 +559,7 @@ impl From<Stop> for PluginFailure {
     fn from(stop: Stop) -> Self {
         match stop {
             Stop::FuelExhausted => Self::FuelExhausted,
+            Stop::WallTime => Self::WallTime,
             Stop::MemoryLimit => Self::MemoryLimit,
             Stop::Http(HttpStop::TooManyRequests) => Self::TooManyRequests,
             Stop::Http(HttpStop::ResponseTooLarge) => Self::ResponseTooLarge,
@@ -519,6 +581,7 @@ fn stop(error: &wasmtime::Error, store: &Store<CallState>) -> Stop {
     }
     match error.downcast_ref::<Trap>() {
         Some(Trap::OutOfFuel) => Stop::FuelExhausted,
+        Some(Trap::Interrupt) => Stop::WallTime,
         Some(trap) => Stop::Trap(trap.to_string()),
         None => Stop::Runtime(error.to_string()),
     }

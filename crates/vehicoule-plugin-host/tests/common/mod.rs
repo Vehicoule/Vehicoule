@@ -9,12 +9,14 @@ use std::time::Duration;
 
 use vehicoule_plugin_host::{
     ByteSize, Fuel, HostConfig, HostError, HttpBudget, HttpRequest, HttpResponse, Network,
-    NetworkError, PluginHost, RequestLimits,
+    NetworkError, PluginHost, RequestLimits, Ticker, Ticks,
 };
 
 /// Arbitrary budgets, large enough for a well-behaved plugin (the spec gives no value; tests choose).
 pub(crate) const MAX_PLUGIN_SIZE: u64 = 8 << 20;
 pub(crate) const FUEL: u64 = 50_000_000;
+/// Never reached unless a test ticks: nothing else ticks the hosts of these tests.
+pub(crate) const WALL_TIME: u64 = 10;
 pub(crate) const MAX_MEMORY: u64 = 32 << 20;
 pub(crate) const MAX_OUTPUT: u64 = 64 << 10;
 pub(crate) const MAX_REQUESTS: u32 = 3;
@@ -32,9 +34,11 @@ pub(crate) fn fixture(name: &str) -> Result<Vec<u8>, String> {
 
 type Answer = dyn Fn(&HttpRequest) -> Result<HttpResponse, NetworkError> + Send + Sync;
 
-/// A network that never opens a socket: it records every request it is given and answers with `answer`.
+/// A network that never opens a socket: it records every request it is given, ticks its host's wall time as a slow
+/// network would let time pass, and answers with `answer`.
 pub(crate) struct FakeNetwork {
     requests: Mutex<Vec<(HttpRequest, RequestLimits)>>,
+    ticks: Mutex<Option<(Ticker, u64)>>,
     answer: Box<Answer>,
 }
 
@@ -44,6 +48,7 @@ impl FakeNetwork {
     ) -> Arc<Self> {
         Arc::new(Self {
             requests: Mutex::new(Vec::new()),
+            ticks: Mutex::new(None),
             answer: Box::new(answer),
         })
     }
@@ -67,6 +72,11 @@ impl Network for FakeNetwork {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push((request.clone(), limits));
+        if let Some((ticker, count)) = &*self.ticks.lock().unwrap_or_else(PoisonError::into_inner) {
+            for _ in 0..*count {
+                ticker.tick();
+            }
+        }
         (self.answer)(request)
     }
 }
@@ -76,10 +86,11 @@ pub(crate) fn ok_network() -> Arc<FakeNetwork> {
     FakeNetwork::new(|_| Ok(HttpResponse::new(200, Vec::new(), b"ok".to_vec())))
 }
 
-fn config(max_plugin_size: u64, max_output: u64) -> HostConfig {
+fn config(max_plugin_size: u64, max_output: u64, wall_time: u64) -> HostConfig {
     HostConfig::new(
         ByteSize::new(max_plugin_size),
         Fuel::new(FUEL),
+        Ticks::new(wall_time),
         ByteSize::new(MAX_MEMORY),
         ByteSize::new(max_output),
         HttpBudget::new(
@@ -91,7 +102,7 @@ fn config(max_plugin_size: u64, max_output: u64) -> HostConfig {
 }
 
 pub(crate) fn host_with(max_plugin_size: u64, max_output: u64) -> Result<PluginHost, HostError> {
-    PluginHost::new(config(max_plugin_size, max_output), ok_network())
+    PluginHost::new(config(max_plugin_size, max_output, WALL_TIME), ok_network())
 }
 
 pub(crate) fn host() -> Result<PluginHost, HostError> {
@@ -100,5 +111,21 @@ pub(crate) fn host() -> Result<PluginHost, HostError> {
 
 /// A host with the test budgets whose plugins reach `network`.
 pub(crate) fn host_on(network: Arc<FakeNetwork>) -> Result<PluginHost, HostError> {
-    PluginHost::new(config(MAX_PLUGIN_SIZE, MAX_OUTPUT), network)
+    PluginHost::new(config(MAX_PLUGIN_SIZE, MAX_OUTPUT, WALL_TIME), network)
+}
+
+/// A host whose calls last `wall_time` ticks, and whose `network` ticks it `ticks_per_request` times for every request
+/// it is given.
+pub(crate) fn host_ticking(
+    network: &Arc<FakeNetwork>,
+    wall_time: u64,
+    ticks_per_request: u64,
+) -> Result<PluginHost, HostError> {
+    let host = PluginHost::new(
+        config(MAX_PLUGIN_SIZE, MAX_OUTPUT, wall_time),
+        Arc::clone(network) as Arc<dyn Network>,
+    )?;
+    *network.ticks.lock().unwrap_or_else(PoisonError::into_inner) =
+        Some((host.ticker(), ticks_per_request));
+    Ok(host)
 }

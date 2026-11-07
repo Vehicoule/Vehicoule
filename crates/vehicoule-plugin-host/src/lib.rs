@@ -22,8 +22,8 @@ mod media;
 mod network;
 
 pub use call::{PluginError, PluginFailure};
-pub use config::{ByteSize, Fuel, HostConfig, HttpBudget};
-pub use host::{HostError, InstallError, InstalledPlugin, PluginHost};
+pub use config::{ByteSize, Fuel, HostConfig, HttpBudget, Ticks};
+pub use host::{HostError, InstallError, InstalledPlugin, PluginHost, Ticker};
 pub use manifest::{Capability, Domain, HostPattern, Manifest, ManifestError, PluginId};
 pub use media::{
     Album, AlbumRef, Artist, ArtistRef, Artwork, Item, ItemKind, Page, Playlist, Track,

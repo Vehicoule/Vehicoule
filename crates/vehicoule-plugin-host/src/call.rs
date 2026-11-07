@@ -50,6 +50,9 @@ pub enum PluginFailure {
     /// The call ran out of fuel.
     #[error("the plugin ran out of fuel")]
     FuelExhausted,
+    /// The call ran past its wall time.
+    #[error("the plugin ran past its wall time")]
+    WallTime,
     /// The plugin asked for more memory than the ceiling.
     #[error("the plugin went over its memory ceiling")]
     MemoryLimit,
