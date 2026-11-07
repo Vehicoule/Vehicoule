@@ -76,11 +76,18 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --locked
 cargo deny check
+cargo deny --manifest-path crates/vehicoule-plugin-host/fuzz/Cargo.toml check
 cargo mutants --workspace --cargo-arg=--locked   # cargo-mutants 27.1.0
 wasm-tools component wit wit/ > /dev/null       # wasm-tools 1.263.0, the plugin contract parses
 cargo kani --workspace                           # Kani 0.68.0, after `cargo kani setup`
 typos                                            # typos-cli 1.52.0
 cargo machete                                    # cargo-machete 0.9.2, no unused dependency
+# In crates/vehicoule-plugin-host/fuzz, on its pinned nightly (cargo-fuzz 0.13.2, ADR 0013), with the test plugins
+# built by scripts/build-plugin-fixtures.sh into $FIXTURES:
+cargo fuzz build
+cargo fuzz run install "$FIXTURES" -- -runs=0
+cargo fuzz run host_pattern -- -seed=1 -runs=200000
+cargo fuzz run manifest -- -seed=1 -runs=200000
 ```
 
 Kani proofs live in `#[cfg(kani)]` modules beside the code they prove ([ADR 0004](docs/adr/0004-verification.md)). The

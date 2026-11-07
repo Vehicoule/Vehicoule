@@ -18,3 +18,4 @@ Only the user moves an ADR from Proposed to Accepted.
 | [0009](0009-declare-every-file-license-with-reuse.md) | Every file's license declared with REUSE, checked in CI | Accepted |
 | [0011](0011-adopt-the-contributor-covenant.md) | The Contributor Covenant 3.0 is the code of conduct, under its own CC BY-SA 4.0 license | Accepted |
 | [0012](0012-one-regression-test-per-fixed-bug.md) | Every fixed bug gets a regression test named after its issue | Accepted |
+| [0013](0013-fuzz-the-plugin-hosts-untrusted-inputs.md) | The plugin host's untrusted inputs are fuzzed with cargo-fuzz and libFuzzer | Accepted |
