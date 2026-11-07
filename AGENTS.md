@@ -82,6 +82,7 @@ wasm-tools component wit wit/ > /dev/null       # wasm-tools 1.263.0, the plugin
 cargo kani --workspace                           # Kani 0.68.0, after `cargo kani setup`
 typos                                            # typos-cli 1.52.0
 cargo machete                                    # cargo-machete 0.9.2, no unused dependency
+zizmor .github/workflows/                        # zizmor 1.32.0, the workflows' security audit
 # In crates/vehicoule-plugin-host/fuzz, on its pinned nightly (cargo-fuzz 0.13.2, ADR 0013), with the test plugins
 # built by scripts/build-plugin-fixtures.sh into $FIXTURES:
 cargo fuzz build
