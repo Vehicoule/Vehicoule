@@ -8,12 +8,12 @@ mod common;
 use std::time::Duration;
 
 use common::{
-    FUEL, FakeNetwork, MAX_MEMORY, MAX_OUTPUT, MAX_REQUESTS, MAX_RESPONSE_BODY, REQUEST_DEADLINE,
-    fixture, host, host_on, host_ticking,
+    FUEL, FakeNetwork, MAX_LOG_MESSAGE, MAX_LOG_MESSAGES, MAX_MEMORY, MAX_OUTPUT, MAX_REQUESTS,
+    MAX_RESPONSE_BODY, REQUEST_DEADLINE, fixture, host, host_on, host_ticking,
 };
 use vehicoule_plugin_host::{
-    ByteSize, CallReport, Capability, Fuel, HttpResponse, InstalledPlugin, Item, ItemKind, Method,
-    NetworkError, PluginError, PluginFailure, PluginHost,
+    ByteSize, CallReport, Capability, Fuel, HttpResponse, InstalledPlugin, Item, ItemKind,
+    LogLevel, Method, NetworkError, PluginError, PluginFailure, PluginHost,
 };
 
 /// A host with the `good` plugin installed; an error says which step failed, and the calling test unwraps it.
@@ -689,4 +689,85 @@ fn a_call_to_a_capability_the_plugin_does_not_provide_reports_nothing_used() {
         Err(PluginFailure::NotProvided(Capability::Search))
     );
     assert_eq!(call.report, CallReport::default());
+}
+
+// Logs (docs/plugin-host-spec.md, section 5): bounded per call, tagged with the plugin's id, in the call's report.
+
+#[test]
+fn what_a_plugin_logs_comes_back_in_order_tagged_with_its_id_and_level() {
+    let (host, plugin) = good().unwrap();
+    let call = host.search(&plugin, "log:warn:2:slow", &[], None);
+    assert!(call.outcome.is_ok(), "{:?}", call.outcome);
+    let logs = &call.report.logs;
+    assert_eq!(logs.len(), 2);
+    for entry in logs {
+        assert_eq!(entry.plugin.as_str(), "fixture");
+        assert_eq!(entry.level, LogLevel::Warn);
+        assert_eq!(entry.message, "slow");
+        assert!(!entry.truncated);
+    }
+    assert_eq!(call.report.logs_dropped, 0);
+}
+
+#[test]
+fn messages_over_the_count_are_dropped_and_counted() {
+    let (host, plugin) = good().unwrap();
+    let call = host.search(
+        &plugin,
+        &format!("log:info:{}:x", MAX_LOG_MESSAGES + 2),
+        &[],
+        None,
+    );
+    assert_eq!(
+        call.report.logs.len(),
+        usize::try_from(MAX_LOG_MESSAGES).unwrap()
+    );
+    assert_eq!(call.report.logs_dropped, 2);
+    // The next call has its whole budget again.
+    let next = host.search(&plugin, "log:info:1:x", &[], None);
+    assert_eq!(next.report.logs.len(), 1);
+    assert_eq!(next.report.logs_dropped, 0);
+}
+
+#[test]
+fn a_message_at_its_limit_is_kept_whole_and_a_longer_one_is_cut() {
+    let (host, plugin) = good().unwrap();
+    let limit = usize::try_from(MAX_LOG_MESSAGE).unwrap();
+    let at = host.search(
+        &plugin,
+        &format!("log:info:1:{}", "a".repeat(limit)),
+        &[],
+        None,
+    );
+    assert_eq!(at.report.logs[0].message, "a".repeat(limit));
+    assert!(!at.report.logs[0].truncated);
+    let over = host.search(
+        &plugin,
+        &format!("log:info:1:{}", "a".repeat(limit + 1)),
+        &[],
+        None,
+    );
+    assert_eq!(over.report.logs[0].message, "a".repeat(limit));
+    assert!(over.report.logs[0].truncated);
+}
+
+#[test]
+fn a_message_cannot_break_the_line_it_is_written_on() {
+    let (host, plugin) = good().unwrap();
+    let forged = host.search(&plugin, "log:error:1:a\nERROR forged", &[], None);
+    assert_eq!(forged.report.logs[0].message, "a\u{FFFD}ERROR forged");
+}
+
+#[test]
+fn what_a_plugin_logged_before_it_trapped_is_kept() {
+    let (host, plugin) = good().unwrap();
+    let call = host.search(&plugin, "log-trap", &[], None);
+    assert!(
+        matches!(call.outcome, Err(PluginFailure::Trap(_))),
+        "{:?}",
+        call.outcome
+    );
+    assert_eq!(call.report.logs.len(), 1);
+    assert_eq!(call.report.logs[0].level, LogLevel::Error);
+    assert_eq!(call.report.logs[0].message, "about to trap");
 }

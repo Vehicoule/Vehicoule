@@ -17,6 +17,7 @@ mod bindings;
 mod call;
 mod config;
 mod host;
+mod logs;
 mod manifest;
 mod media;
 mod network;
@@ -24,8 +25,9 @@ mod network;
 mod proof_input;
 
 pub use call::{CallReport, PluginError, PluginFailure, Reported};
-pub use config::{ByteSize, Fuel, HostConfig, HttpBudget, Ticks};
+pub use config::{ByteSize, Fuel, HostConfig, HttpBudget, LogBudget, Ticks};
 pub use host::{HostError, InstallError, InstalledPlugin, PluginHost, Ticker};
+pub use logs::{LogEntry, LogLevel};
 pub use manifest::{Capability, Domain, HostPattern, Manifest, ManifestError, PluginId};
 pub use media::{
     Album, AlbumRef, Artist, ArtistRef, Artwork, Item, ItemKind, Page, Playlist, Track,

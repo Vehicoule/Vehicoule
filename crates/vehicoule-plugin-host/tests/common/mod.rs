@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use vehicoule_plugin_host::{
-    ByteSize, Fuel, HostConfig, HostError, HttpBudget, HttpRequest, HttpResponse, Network,
-    NetworkError, PluginHost, RequestLimits, Ticker, Ticks,
+    ByteSize, Fuel, HostConfig, HostError, HttpBudget, HttpRequest, HttpResponse, LogBudget,
+    Network, NetworkError, PluginHost, RequestLimits, Ticker, Ticks,
 };
 
 /// Arbitrary budgets, large enough for a well-behaved plugin (the spec gives no value; tests choose).
@@ -22,6 +22,8 @@ pub(crate) const MAX_OUTPUT: u64 = 64 << 10;
 pub(crate) const MAX_REQUESTS: u32 = 3;
 pub(crate) const MAX_RESPONSE_BODY: u64 = 1024;
 pub(crate) const REQUEST_DEADLINE: Duration = Duration::from_secs(10);
+pub(crate) const MAX_LOG_MESSAGES: u32 = 4;
+pub(crate) const MAX_LOG_MESSAGE: u64 = 16;
 
 /// The bytes of a test plugin; an error names what is missing, and the calling test unwraps it and fails.
 pub(crate) fn fixture(name: &str) -> Result<Vec<u8>, String> {
@@ -98,6 +100,7 @@ fn config(max_plugin_size: u64, max_output: u64, wall_time: u64) -> HostConfig {
             ByteSize::new(MAX_RESPONSE_BODY),
             REQUEST_DEADLINE,
         ),
+        LogBudget::new(MAX_LOG_MESSAGES, ByteSize::new(MAX_LOG_MESSAGE)),
     )
 }
 
