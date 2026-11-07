@@ -14,6 +14,7 @@ path = [
     "README.md",
     "REUSE.toml",
     "SECURITY.md",
+    "_typos.toml",
     "clippy.toml",
     "crates/**",
     "deny.toml",
