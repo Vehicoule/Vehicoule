@@ -1,6 +1,6 @@
 # 0016. Count the core's instructions with Callgrind, and fail above a ceiling
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-07
 - Deciders: the user
 
@@ -33,13 +33,16 @@ Apple silicon nor on Windows, so the benchmarks run in CI only.
 
 ## Decision
 
-Recommended: option 1.
+Option 1, chosen by the user on 2026-11-07:
 
 - The benchmarks live in `crates/vehicoule-core/bench/`, a workspace of its own like the fuzz targets
   ([ADR 0015](0015-fuzz-the-cores-state-machines.md)), with its own `Cargo.lock`: gungraun never joins the app's
   dependency graph. `cargo deny` checks that workspace.
 - The CI's `bench` job runs on a pinned runner image (`ubuntu-24.04`), so that Valgrind's version only changes in a
   pull request that changes the image; it prints that version. It installs `gungraun-runner` at gungraun's version.
+- The margin over a recorded count is 10 %, and at least 100 instructions: the same build counted up to 32
+  instructions apart in CI and locally, in the benchmarks that allocate (one run each), so 10 % of a count of a few
+  dozen would fail on noise.
 - The first benchmarks cover every queue operation on a queue of 10,000 entries, unshuffled and shuffled. That length
   is chosen for the benchmarks; the core spec sets no limit on the queue's length.
 - Plugin loading gets its benchmark in a pull request coordinated with the plugin host's work. Its cost under Valgrind
@@ -55,5 +58,5 @@ Recommended: option 1.
 - The first run already shows one cost: on a shuffled queue of 10,000 entries, `Queue::play_order` runs 250 million
   instructions, because it looks each id up among the entries one by one. Fixing that is its own pull request, which
   lowers that count.
-- The job adds the build of the bench workspace, the install of Valgrind and of `gungraun-runner`, and the run: the
-  19 benchmarks took 9 s locally (shared container, Valgrind 3.22.0, one run).
+- The job adds the build of the bench workspace, the install of Valgrind and of `gungraun-runner`, and the run: 19
+  benchmarks took 6 s in CI, and 23 took 11 s locally in a shared container (Valgrind 3.22.0, one run each).

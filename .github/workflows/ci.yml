@@ -301,7 +301,7 @@ jobs:
 
   # ADR 0016: the core's benchmarks count instructions under Callgrind, which does not depend on the runner's load,
   # and each one fails above its ceiling. The runner's image is pinned so that Valgrind's version stays the same.
-  # Locally (shared container, Valgrind 3.22.0, one run), the 19 benchmarks took 9 s after the build.
+  # The first run of its 19 benchmarks took 6 s after the build, and the job 1.5 min with the installs.
   bench:
     name: bench
     runs-on: ubuntu-24.04

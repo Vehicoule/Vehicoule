@@ -8,7 +8,7 @@ use gungraun::{
     Callgrind, EventKind, LibraryBenchmarkConfig, library_benchmark, library_benchmark_group, main,
 };
 use std::hint::black_box;
-use vehicoule_core::queue::{Advance, EntryId, Origin, Queue, QueueSource};
+use vehicoule_core::queue::{Advance, EntryId, Origin, Queue, QueueSource, Repeat};
 
 /// Entries in the benchmarked queue: a whole large library queued at once. Chosen for the benchmarks; the core spec
 /// sets no limit on the queue's length.
@@ -53,11 +53,17 @@ fn large_and_last(shuffled: bool) -> (Queue<u32>, EntryId) {
     (queue, last)
 }
 
+/// The least margin over a recorded count, in instructions. The same build counted up to 32 instructions apart in CI
+/// and locally, in the benchmarks that allocate (one run each), so 10 % of a count of a few dozen is too tight.
+const LEAST_MARGIN: u64 = 100;
+
 /// The configuration of a benchmark whose operation ran `measured` instructions when its ceiling was set: it fails
-/// above 10 % more (ADR 0016). `measured` comes from the CI's `bench` job, and raising it is the user's decision.
+/// above 10 % more, or [`LEAST_MARGIN`] more when that is larger (ADR 0016). `measured` comes from the CI's `bench`
+/// job, and raising it is the user's decision.
 fn measured(measured: u64) -> LibraryBenchmarkConfig {
     let mut config = LibraryBenchmarkConfig::default();
-    config.tool(Callgrind::default().hard_limits([(EventKind::Ir, measured + measured / 10)]));
+    let ceiling = measured + (measured / 10).max(LEAST_MARGIN);
+    config.tool(Callgrind::default().hard_limits([(EventKind::Ir, ceiling)]));
     config
 }
 
@@ -74,6 +80,28 @@ fn replace(mut queue: Queue<u32>) -> Queue<u32> {
 #[bench::large(args = (false), setup = large, config = measured(330_349))]
 fn shuffle(mut queue: Queue<u32>) -> Queue<u32> {
     queue.shuffle(black_box(SEED));
+    queue
+}
+
+#[library_benchmark]
+#[bench::large(args = (true), setup = large, config = measured(230))]
+fn unshuffle(mut queue: Queue<u32>) -> Queue<u32> {
+    queue.unshuffle();
+    queue
+}
+
+#[library_benchmark]
+#[bench::large(args = (false), setup = large, config = measured(26))]
+fn set_repeat(mut queue: Queue<u32>) -> Queue<u32> {
+    queue.set_repeat(black_box(Repeat::All));
+    queue
+}
+
+#[library_benchmark]
+#[bench::unshuffled(args = (false), setup = large, config = measured(27))]
+#[bench::shuffled(args = (true), setup = large, config = measured(28))]
+fn clear(mut queue: Queue<u32>) -> Queue<u32> {
+    queue.clear();
     queue
 }
 
@@ -103,7 +131,7 @@ fn jump_to((mut queue, last): (Queue<u32>, EntryId)) -> Queue<u32> {
 
 #[library_benchmark]
 #[bench::unshuffled(args = (false), setup = large_and_current, config = measured(140_091))]
-#[bench::shuffled(args = (true), setup = large_and_current, config = measured(190_124))]
+#[bench::shuffled(args = (true), setup = large_and_current, config = measured(190_140))]
 fn remove_current((mut queue, current): (Queue<u32>, EntryId)) -> Queue<u32> {
     black_box(queue.remove(black_box(current))).expect("the current entry is in the queue");
     queue
@@ -119,7 +147,7 @@ fn move_last_to_front((mut queue, last): (Queue<u32>, EntryId)) -> Queue<u32> {
 
 #[library_benchmark]
 #[bench::unshuffled(args = (false), setup = large, config = measured(152_166))]
-#[bench::shuffled(args = (true), setup = large, config = measured(353_795))]
+#[bench::shuffled(args = (true), setup = large, config = measured(353_763))]
 fn play_next(mut queue: Queue<u32>) -> Queue<u32> {
     black_box(queue.play_next(black_box(0..ADDED))).expect("the ids do not run out");
     queue
@@ -127,7 +155,7 @@ fn play_next(mut queue: Queue<u32>) -> Queue<u32> {
 
 #[library_benchmark]
 #[bench::unshuffled(args = (false), setup = large, config = measured(945))]
-#[bench::shuffled(args = (true), setup = large, config = measured(81_709))]
+#[bench::shuffled(args = (true), setup = large, config = measured(81_677))]
 fn append(mut queue: Queue<u32>) -> Queue<u32> {
     black_box(queue.append(black_box(0..ADDED), Origin::Manual)).expect("the ids do not run out");
     queue
@@ -147,6 +175,9 @@ library_benchmark_group!(
     benchmarks = [
         replace,
         shuffle,
+        unshuffle,
+        set_repeat,
+        clear,
         next,
         previous,
         jump_to,
