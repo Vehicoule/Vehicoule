@@ -109,6 +109,8 @@ and report what you ran.
 - New public structs are `#[non_exhaustive]` and implement `Default` when a default makes sense. Public enums are
   `#[non_exhaustive]`.
 - States are enums, never several booleans. Invalid states are unrepresentable.
+- A pull request that fixes a bug adds a test that fails without the fix, named `regression_<issue>_<what>` with a
+  link to the issue above it ([ADR 0012](docs/adr/0012-one-regression-test-per-fixed-bug.md)).
 - Durations and positions are typed (`std::time::Duration` or a newtype), never a bare integer or float in public API.
 - Core abstractions are generic over the content domain (music, video, books); music-specific code lives in its own
   module or crate, so video and books add code instead of changing it.
