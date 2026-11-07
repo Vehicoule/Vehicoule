@@ -186,11 +186,11 @@ Answered by the user on 2026-11-06:
    the rest of the layout.
 2. **Wasmtime**: agreed, pinned to the LTS 48.x (ADR 0007).
 3. **No WASI**: left to Claude; taken: plugins get only the contract's `http` and `log`.
-4. **First music plugin**: `ytmusic`, in `vehicoule-plugins-extra`. The published plugins are `deezer`, `itunes`,
-   `lrclib` and `ytmusic`; only `ytmusic` resolves a full track to a stream, so it is the only one that tests the
-   whole chain (resolve, play, radio). The three others give search, metadata, artwork and lyrics; which plugin
-   provides which capability, and in which default order, is in [plugin providers](plugin-providers.md), decided by
-   the user later on 2026-11-06.
+4. **First music plugin**: `ytmusic`, in `vehicoule-plugins-extra`. The published plugins are `deezer`, `itunes`
+   (withdrawn by [ADR 0018](adr/0018-withdraw-the-itunes-plugin-until-video.md)), `lrclib` and `ytmusic`; only `ytmusic`
+   resolves a full track to a stream, so it is the only one that tests the whole chain (resolve, play, radio). The three
+   others give search, metadata, artwork and lyrics; which plugin provides which capability, and in which default order,
+   is in [plugin providers](plugin-providers.md), decided by the user later on 2026-11-06.
 
 ## 11. Order of the work
 
