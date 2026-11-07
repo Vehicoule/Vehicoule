@@ -122,11 +122,39 @@ impl HttpBudget {
     }
 }
 
+/// The log budget of one call: how many messages a plugin may log, and how long each may be (section 5).
+///
+/// ```
+/// use vehicoule_plugin_host::{ByteSize, LogBudget};
+///
+/// let log = LogBudget::new(20, ByteSize::new(512));
+/// assert_eq!(log.max_messages, 20);
+/// ```
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LogBudget {
+    /// The most messages a call keeps; the ones after are counted and dropped.
+    pub max_messages: u32,
+    /// The longest message kept; a longer one is cut at a character boundary.
+    pub max_message: ByteSize,
+}
+
+impl LogBudget {
+    /// A log budget from the edge's configuration.
+    #[must_use]
+    pub const fn new(max_messages: u32, max_message: ByteSize) -> Self {
+        Self {
+            max_messages,
+            max_message,
+        }
+    }
+}
+
 /// The budgets the host enforces.
 ///
 /// ```
 /// use std::time::Duration;
-/// use vehicoule_plugin_host::{ByteSize, Fuel, HostConfig, HttpBudget, Ticks};
+/// use vehicoule_plugin_host::{ByteSize, Fuel, HostConfig, HttpBudget, LogBudget, Ticks};
 ///
 /// let config = HostConfig::new(
 ///     ByteSize::new(8 << 20),
@@ -135,6 +163,7 @@ impl HttpBudget {
 ///     ByteSize::new(64 << 20),
 ///     ByteSize::new(1 << 20),
 ///     HttpBudget::new(10, ByteSize::new(2 << 20), Duration::from_secs(10)),
+///     LogBudget::new(20, ByteSize::new(512)),
 /// );
 /// assert_eq!(config.max_plugin_size, ByteSize::new(8 << 20));
 /// assert_eq!(config.max_output, ByteSize::new(1 << 20));
@@ -156,6 +185,8 @@ pub struct HostConfig {
     pub max_output: ByteSize,
     /// The HTTP budget of each call.
     pub http: HttpBudget,
+    /// The log budget of each call.
+    pub log: LogBudget,
 }
 
 impl HostConfig {
@@ -168,6 +199,7 @@ impl HostConfig {
         max_memory: ByteSize,
         max_output: ByteSize,
         http: HttpBudget,
+        log: LogBudget,
     ) -> Self {
         Self {
             max_plugin_size,
@@ -176,6 +208,7 @@ impl HostConfig {
             max_memory,
             max_output,
             http,
+            log,
         }
     }
 }

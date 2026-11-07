@@ -11,7 +11,7 @@ use thiserror::Error;
 use crate::bindings::base::vehicoule::plugin::types;
 use crate::bindings::search::SearchPluginPre;
 use crate::media::{OutputSize, output_bytes};
-use crate::{ByteSize, Capability, Fuel, InstalledPlugin, ItemKind, Page, PluginHost};
+use crate::{ByteSize, Capability, Fuel, InstalledPlugin, ItemKind, LogEntry, Page, PluginHost};
 
 /// An error the plugin itself returned, as the contract names them.
 #[non_exhaustive]
@@ -96,7 +96,7 @@ pub enum PluginFailure {
 /// assert_eq!(report.output, None);
 /// ```
 #[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CallReport {
     /// The fuel the call consumed: all of it when it ran out.
     pub fuel_used: Fuel,
@@ -109,6 +109,11 @@ pub struct CallReport {
     /// The size of what the plugin returned, a value or its own error, as the output budget counts it; `None` when
     /// it returned nothing.
     pub output: Option<ByteSize>,
+    /// What the plugin logged, in order, within the log budget, for the edge to write where it keeps logs; never to
+    /// show to the user as app text (section 5).
+    pub logs: Vec<LogEntry>,
+    /// The messages logged after the budget's last, dropped.
+    pub logs_dropped: u32,
 }
 
 impl Default for CallReport {
@@ -119,6 +124,8 @@ impl Default for CallReport {
             requests_sent: 0,
             requests_refused: 0,
             output: None,
+            logs: Vec::new(),
+            logs_dropped: 0,
         }
     }
 }

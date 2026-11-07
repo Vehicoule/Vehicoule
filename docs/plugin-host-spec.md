@@ -79,7 +79,12 @@ Returned by `describe`, validated at install:
   the core handles as any failed load. This check is the player edge's (each platform player), specified here because
   the sandbox depends on it; its tests come with each player.
 - **Log.** Messages are bounded in size and count per call, tagged with the plugin id, and never shown to the user as
-  app text.
+  app text. A call keeps its first messages up to the log budget (section 6) and counts the ones after as dropped; a
+  message longer than the budget is cut at a character boundary and marked as cut. Every control character, line
+  breaks included, and U+2028 and U+2029 (the line and paragraph separators, which are not control characters)
+  become U+FFFD, so a message is one line and cannot forge another where the edge writes it. The
+  messages come back in the call's report (section 7), in order, for the edge to write where it keeps logs; messages
+  logged during install are dropped.
 
 ## 6. Budgets
 
@@ -92,6 +97,7 @@ set from measurements, section 9):
 - **Memory**: a ceiling on linear memory and on instances.
 - **HTTP**: a maximum number of requests per call, a maximum response body size, and a deadline per request.
 - **Output**: a maximum size of the returned value (strings, lists).
+- **Log**: a maximum number of messages per call, and a maximum size per message.
 - **Plugin size**: a maximum size of the plugin's bytes, checked before compilation (section 3).
 
 Exceeding any budget ends the call with the matching failure. None of them is retried by the host.
@@ -112,7 +118,7 @@ failure behind a default value.
 Every capability call also returns a report of what it used, with its value or its failure: the fuel it consumed, the
 peak bytes of its memories and tables together, the requests it sent to the network, the requests the sandbox refused,
 and the size of what the plugin returned (a value or its own error, as the output budget counts it), or none when it
-returned nothing. A call to a capability the plugin does not provide never runs and reports nothing used. The report
+returned nothing; and what the plugin logged (section 5), with the count of messages dropped. A call to a capability the plugin does not provide never runs and reports nothing used. The report
 is what the measurements of section 9 read. It does not hold the wall time yet: Wasmtime 48.0.8 gives no way to read
 the epoch (`Engine` has `increment_epoch` and no getter), so how to count a call's ticks is a later change.
 

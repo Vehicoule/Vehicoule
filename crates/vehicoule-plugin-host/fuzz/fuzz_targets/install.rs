@@ -11,8 +11,8 @@ use std::time::Duration;
 
 use libfuzzer_sys::fuzz_target;
 use vehicoule_plugin_host::{
-    ByteSize, Fuel, HostConfig, HttpBudget, HttpRequest, HttpResponse, Manifest, Network,
-    NetworkError, PluginHost, RequestLimits, Ticks,
+    ByteSize, Fuel, HostConfig, HttpBudget, HttpRequest, HttpResponse, LogBudget, Manifest,
+    Network, NetworkError, PluginHost, RequestLimits, Ticks,
 };
 
 /// Install refuses every request a plugin makes in `describe`, so this network is never reached; if it were, the
@@ -42,6 +42,7 @@ fn host() -> &'static PluginHost {
             ByteSize::new(32 << 20),
             ByteSize::new(64 << 10),
             HttpBudget::new(3, ByteSize::new(1024), Duration::from_secs(10)),
+            LogBudget::new(4, ByteSize::new(16)),
         );
         match PluginHost::new(config, Arc::new(Unreachable)) {
             Ok(host) => host,

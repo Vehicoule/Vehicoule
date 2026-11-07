@@ -202,6 +202,26 @@ impl exports::vehicoule::plugin::search::Guest for Fixture {
                 }
             }
             "count" => Ok(page(vec![Item::Track(track(calls.to_string()))])),
+            "log-trap" => {
+                vehicoule::plugin::log::log(vehicoule::plugin::log::Level::Error, "about to trap");
+                panic!("trap after a log on purpose")
+            }
+            q if q.starts_with("log:") => {
+                use vehicoule::plugin::log::{Level, log};
+                let mut parts = q.trim_start_matches("log:").splitn(3, ':');
+                let level = match parts.next() {
+                    Some("debug") => Level::Debug,
+                    Some("warn") => Level::Warn,
+                    Some("error") => Level::Error,
+                    _ => Level::Info,
+                };
+                let n: usize = parts.next().and_then(|n| n.parse().ok()).unwrap_or(0);
+                let message = parts.next().unwrap_or("");
+                for _ in 0..n {
+                    log(level, message);
+                }
+                Ok(page(Vec::new()))
+            }
             "error:not-found" => Err(Error::NotFound),
             "error:unsupported" => Err(Error::Unsupported),
             "error:rate-limited" => Err(Error::RateLimited(Some(1_500))),

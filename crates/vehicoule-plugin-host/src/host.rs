@@ -10,6 +10,7 @@ use wasmtime::{Engine, ResourceLimiter, Store, Trap};
 
 use crate::bindings::base::vehicoule::plugin::{http, log, types};
 use crate::bindings::{artwork, base, link_import, lyrics, metadata, radio, resolve, search};
+use crate::logs::Logs;
 use crate::media::{OutputSize, output_bytes};
 use crate::network::{HeaderRefusal, HttpsUrl, RequestLimits, UrlRefusal, header_refusal};
 use crate::{
@@ -121,6 +122,8 @@ pub(crate) struct CallState {
     http_stop: Option<HttpStop>,
     /// The requests of a capability call that the sandbox refused, for the call's report.
     requests_refused: u32,
+    /// What a capability call logged; `None` during install, whose messages are dropped.
+    logs: Option<Logs>,
 }
 
 /// What a call may do on the network.
@@ -147,7 +150,10 @@ pub(crate) enum HttpStop {
 impl CallState {
     /// What the call used, read once it returned or stopped. `fuel` is the call's whole fuel and `fuel_left` what
     /// Wasmtime says is left of it.
-    fn report(&self, fuel: Fuel, fuel_left: u64) -> CallReport {
+    fn report(self, fuel: Fuel, fuel_left: u64) -> CallReport {
+        let (logs, logs_dropped) = self
+            .logs
+            .map_or((Vec::new(), 0), |logs| (logs.entries, logs.dropped));
         CallReport {
             fuel_used: Fuel::new(fuel.get().saturating_sub(fuel_left)),
             memory_peak: ByteSize::new(u64::try_from(self.limiter.used_bytes).unwrap_or(u64::MAX)),
@@ -157,6 +163,8 @@ impl CallState {
             },
             requests_refused: self.requests_refused,
             output: None,
+            logs,
+            logs_dropped,
         }
     }
 
@@ -255,8 +263,11 @@ fn checked_url(
 }
 
 impl log::Host for CallState {
-    /// Logs have no sink yet; they are dropped, never shown.
-    fn log(&mut self, _level: log::Level, _message: String) -> wasmtime::Result<()> {
+    /// Keeps the message for the call's report, within the log budget (section 5). During install it is dropped.
+    fn log(&mut self, level: log::Level, message: String) -> wasmtime::Result<()> {
+        if let Some(logs) = &mut self.logs {
+            logs.push(level.into(), &message);
+        }
         Ok(())
     }
 }
@@ -344,7 +355,7 @@ impl PluginHost {
     /// use std::time::Duration;
     /// use vehicoule_plugin_host::{
     ///     ByteSize, Fuel, HostConfig, HttpBudget, HttpRequest, HttpResponse, Network, NetworkError, PluginHost,
-    ///     RequestLimits, Ticks,
+    ///     LogBudget, RequestLimits, Ticks,
     /// };
     ///
     /// struct Offline;
@@ -362,6 +373,7 @@ impl PluginHost {
     ///     ByteSize::new(16 << 20),
     ///     ByteSize::new(1 << 20),
     ///     HttpBudget::new(10, ByteSize::new(1 << 20), Duration::from_secs(10)),
+    ///     LogBudget::new(20, ByteSize::new(512)),
     /// );
     /// assert!(PluginHost::new(config, Arc::new(Offline)).is_ok());
     /// ```
@@ -442,7 +454,7 @@ impl PluginHost {
     /// # use std::time::Duration;
     /// # use vehicoule_plugin_host::{
     /// #     ByteSize, Fuel, HostConfig, HttpBudget, HttpRequest, HttpResponse, Network, NetworkError, PluginHost,
-    /// #     RequestLimits, Ticks,
+    /// #     LogBudget, RequestLimits, Ticks,
     /// # };
     /// # struct Offline;
     /// # impl Network for Offline {
@@ -457,6 +469,7 @@ impl PluginHost {
     /// #     ByteSize::new(16 << 20),
     /// #     ByteSize::new(1 << 20),
     /// #     HttpBudget::new(10, ByteSize::new(1 << 20), Duration::from_secs(10)),
+    /// #     LogBudget::new(20, ByteSize::new(512)),
     /// # );
     /// let host = PluginHost::new(config, Arc::new(Offline))?;
     /// let ticker = host.ticker();
@@ -496,7 +509,8 @@ impl PluginHost {
             budget: self.config.http,
             sent: 0,
         };
-        let mut store = match self.store(http) {
+        let logs = Logs::new(plugin.manifest.id().clone(), self.config.log);
+        let mut store = match self.store(http, Some(logs)) {
             Ok(store) => store,
             Err(e) => {
                 return (
@@ -509,12 +523,14 @@ impl PluginHost {
         // Fuel is always on (`PluginHost::new`), so this cannot fail; if it did, the whole fuel would be reported as
         // used, never less than was.
         let fuel_left = store.get_fuel().unwrap_or(0);
-        let report = store.data().report(self.config.fuel_per_call, fuel_left);
+        let report = store
+            .into_data()
+            .report(self.config.fuel_per_call, fuel_left);
         (outcome, report)
     }
 
     /// A store for one call: its own memory ceiling, its own fuel, its own wall time and its own network grant.
-    fn store(&self, http: Http) -> wasmtime::Result<Store<CallState>> {
+    fn store(&self, http: Http, logs: Option<Logs>) -> wasmtime::Result<Store<CallState>> {
         let mut store = Store::new(
             &self.engine,
             CallState {
@@ -522,6 +538,7 @@ impl PluginHost {
                 http,
                 http_stop: None,
                 requests_refused: 0,
+                logs,
             },
         );
         store.limiter(|state| &mut state.limiter);
@@ -537,7 +554,7 @@ impl PluginHost {
         pre: &InstancePre<CallState>,
     ) -> Result<base::exports::vehicoule::plugin::plugin::Manifest, InstallError> {
         let mut store = self
-            .store(Http::Refused)
+            .store(Http::Refused, None)
             .map_err(|e| InstallError::Runtime(e.to_string()))?;
         base::BasePre::new(pre.clone())
             .and_then(|pre| pre.instantiate(&mut store))
