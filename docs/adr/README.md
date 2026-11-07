@@ -25,3 +25,4 @@ Only the user moves an ADR from Proposed to Accepted.
 | [0015](0015-fuzz-the-cores-state-machines.md) | The core's state machines are fuzzed with sequences of operations | Accepted |
 | [0016](0016-count-the-cores-instructions-with-callgrind.md) | The core's operations are benchmarked by instruction count, each under a ceiling | Accepted |
 | [0017](0017-no-telemetry-crash-reports-on-request.md) | Nothing is sent to the project, except a crash report the user chooses to send | Accepted |
+| [0018](0018-withdraw-the-itunes-plugin-until-video.md) | The `itunes` plugin is withdrawn until the video work starts | Accepted |
