@@ -81,6 +81,7 @@ wasm-tools component wit wit/ > /dev/null       # wasm-tools 1.263.0, the plugin
 cargo kani --workspace                           # Kani 0.68.0, after `cargo kani setup`
 typos                                            # typos-cli 1.52.0
 cargo machete                                    # cargo-machete 0.9.2, no unused dependency
+zizmor .github/workflows/                        # zizmor 1.32.0, the workflows' security audit
 ```
 
 Kani proofs live in `#[cfg(kani)]` modules beside the code they prove ([ADR 0004](docs/adr/0004-verification.md)). The
