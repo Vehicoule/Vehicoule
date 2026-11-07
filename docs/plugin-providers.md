@@ -25,8 +25,8 @@ Chosen by the user on 2026-11-06:
 | Capability | Default order | Why |
 |---|---|---|
 | `search` (search and suggestions) | `deezer`, then `itunes` | Deezer gives each track's ISRC, searches playlists and has an autocomplete endpoint; iTunes has none of the three (section 4) |
-| `metadata` (album, artist, playlist pages) | `deezer`, then `itunes` | Same catalog as search, so the ids a page links to are the ones search returned |
-| `artwork` (covers and artist pictures) | `deezer`, then `itunes` | Deezer gives covers and artist pictures; iTunes gives covers only |
+| `metadata` (album, artist, playlist pages) | the provider of the item's id, with no fallback | A page is asked by id, and an id belongs to the plugin that returned it ([plugin host spec](plugin-host-spec.md), section 8): another plugin cannot read it. When that provider fails, the page fails; the user can search again, which falls back to `itunes` |
+| `artwork` (covers and artist pictures) | `deezer`, then `itunes` | Deezer gives covers and artist pictures; iTunes gives covers only. `find` takes the whole item (title, artists, album), so a provider can look up an item another one returned |
 | `resolve` (a track to a playable stream) | `ytmusic` only | Deezer and iTunes give 30-second previews, not full tracks. `ytmusic` resolves tracks found by any provider, matching on ISRC, title, artists and duration |
 | `radio` (continuation candidates) | `ytmusic` | Its radio starts from a track; Deezer's public radio starts from an artist |
 | `lyrics` | `lrclib` only | Synced and plain lyrics. A second provider is added only if missing lyrics are measured |
