@@ -9,7 +9,6 @@ use std::time::Duration;
 use thiserror::Error;
 
 use crate::ByteSize;
-use crate::manifest::is_host_name;
 
 /// The network a plugin's checked requests go to, given by the edge to [`PluginHost::new`](crate::PluginHost::new).
 ///
@@ -83,26 +82,68 @@ impl HttpsUrl {
     /// as `/`), no userinfo, no port, a host name and nothing else in the authority. The fragment is dropped, as HTTP
     /// never sends it.
     pub(crate) fn parse(url: &str) -> Result<Self, UrlRefusal> {
-        let rest = url.strip_prefix("https://").ok_or(UrlRefusal::Scheme)?;
-        if !rest.bytes().all(|b| b.is_ascii_graphic() && b != b'\\') {
+        let parts = UrlParts::of(url.as_bytes())?;
+        let (Some(authority), Some(tail)) = (
+            url.get(SCHEME.len()..parts.host_end),
+            url.get(parts.host_end..parts.end),
+        ) else {
+            // Not reached: `UrlParts::of` gives ASCII boundaries within the URL.
             return Err(UrlRefusal::Host);
-        }
-        let rest = rest.split_once('#').map_or(rest, |(before, _)| before);
-        let (authority, tail) = rest
-            .find(['/', '?'])
-            .and_then(|end| rest.split_at_checked(end))
-            .unwrap_or((rest, ""));
-        let host = authority.to_ascii_lowercase();
-        if !is_host_name(&host) {
-            // Userinfo (`@`) and ports (`:`) are not host name characters, so they land here too.
-            return Err(UrlRefusal::Host);
-        }
-        let url = if tail.starts_with('/') {
-            format!("https://{host}{tail}")
-        } else {
-            format!("https://{host}/{tail}")
         };
+        let host = authority.to_ascii_lowercase();
+        let mut url = String::with_capacity(
+            SCHEME
+                .len()
+                .saturating_add(host.len())
+                .saturating_add(tail.len())
+                .saturating_add(1),
+        );
+        url.push_str("https://");
+        url.push_str(&host);
+        if !tail.starts_with('/') {
+            url.push('/');
+        }
+        url.push_str(tail);
         Ok(Self { url, host })
+    }
+}
+
+/// The only scheme a plugin may use.
+const SCHEME: &[u8] = b"https://";
+
+/// Where the host and the part HTTP sends end in a URL that passed the checks of [`HttpsUrl::parse`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct UrlParts {
+    /// The end of the host: the first `/` or `?` after the scheme, or [`UrlParts::end`].
+    pub(crate) host_end: usize,
+    /// The end of what HTTP sends: the first `#`, or the URL's length.
+    pub(crate) end: usize,
+}
+
+impl UrlParts {
+    /// The checks of [`HttpsUrl::parse`], on bytes: one pass, without `str` searches, so that Kani proves them for
+    /// every input up to its bound (ADR 0014).
+    pub(crate) fn of(url: &[u8]) -> Result<Self, UrlRefusal> {
+        let rest = url.strip_prefix(SCHEME).ok_or(UrlRefusal::Scheme)?;
+        if !rest.iter().all(|b| b.is_ascii_graphic() && *b != b'\\') {
+            return Err(UrlRefusal::Host);
+        }
+        let end = rest.iter().position(|b| *b == b'#').unwrap_or(rest.len());
+        let sent = rest.get(..end).unwrap_or(rest);
+        let host_end = sent
+            .iter()
+            .position(|b| *b == b'/' || *b == b'?')
+            .unwrap_or(end);
+        let authority = sent.get(..host_end).unwrap_or(sent);
+        let lowered = authority.iter().map(u8::to_ascii_lowercase);
+        // Userinfo (`@`) and ports (`:`) are not host name characters, so they are refused here too.
+        if authority.len() > 253 || !crate::manifest::are_host_name_labels(lowered) {
+            return Err(UrlRefusal::Host);
+        }
+        Ok(Self {
+            host_end: host_end.saturating_add(SCHEME.len()),
+            end: end.saturating_add(SCHEME.len()),
+        })
     }
 }
 
@@ -187,12 +228,27 @@ pub enum NetworkError {
 /// Whether a header a plugin sets may be sent: a token name, a value without control characters other than tab, and
 /// never `Host`, which could reach another site behind the same address.
 pub(crate) fn header_refusal(name: &str, value: &str) -> Option<HeaderRefusal> {
-    if name.eq_ignore_ascii_case("host") {
+    header_refusal_bytes(name.as_bytes(), value.as_bytes())
+}
+
+/// [`header_refusal`] on the bytes of valid UTF-8, without `str` searches, so that Kani proves it for every input up to
+/// its bound (ADR 0014).
+pub(crate) fn header_refusal_bytes(name: &[u8], value: &[u8]) -> Option<HeaderRefusal> {
+    if name.eq_ignore_ascii_case(b"host") {
         return Some(HeaderRefusal::Host);
     }
-    let token = |b: u8| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b);
-    let name_ok = !name.is_empty() && name.bytes().all(token);
-    let value_ok = value.chars().all(|c| c == '\t' || !c.is_control());
+    let token = |b: &u8| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(b);
+    let name_ok = !name.is_empty() && name.iter().all(token);
+    // The control characters are U+0000 to U+001F, U+007F, and U+0080 to U+009F, which UTF-8 writes `C2 80` to
+    // `C2 9F`; `C2` starts no other character.
+    let mut previous = 0;
+    let value_ok = value.iter().all(|&b| {
+        let control = (b < 0x20 && b != b'\t')
+            || b == 0x7f
+            || (previous == 0xc2 && (0x80..=0x9f).contains(&b));
+        previous = b;
+        !control
+    });
     (!name_ok || !value_ok).then_some(HeaderRefusal::Malformed)
 }
 
@@ -205,11 +261,15 @@ pub(crate) enum HeaderRefusal {
     Malformed,
 }
 
+#[cfg(kani)]
+mod proofs;
+
 #[cfg(test)]
 mod tests {
     use proptest::prelude::*;
 
     use super::*;
+    use crate::manifest::is_host_name;
 
     fn parse(url: &str) -> Result<String, UrlRefusal> {
         HttpsUrl::parse(url).map(|u| u.as_str().to_owned())
@@ -291,6 +351,22 @@ mod tests {
     }
 
     #[test]
+    fn a_host_of_253_bytes_is_kept_and_one_of_254_refused() {
+        let label = "a".repeat(63);
+        let longest = format!("{label}.{label}.{label}.{}", "b".repeat(61));
+        assert_eq!(longest.len(), 253);
+        assert_eq!(
+            HttpsUrl::parse(&format!("https://{longest}/x")).map(|u| u.host().len()),
+            Ok(253)
+        );
+        let over = format!("{label}.{label}.{label}.{}", "b".repeat(62));
+        assert_eq!(
+            HttpsUrl::parse(&format!("https://{over}/x")),
+            Err(UrlRefusal::Host)
+        );
+    }
+
+    #[test]
     fn a_host_header_or_a_malformed_header_is_refused() {
         assert_eq!(header_refusal("Host", "x"), Some(HeaderRefusal::Host));
         assert_eq!(header_refusal("HOST", "x"), Some(HeaderRefusal::Host));
@@ -333,6 +409,16 @@ mod tests {
             let once = HttpsUrl::parse(&url).map(|u| u.as_str().to_owned());
             let twice = once.clone().and_then(|u| HttpsUrl::parse(&u).map(|u| u.as_str().to_owned()));
             prop_assert_eq!(once, twice);
+        }
+
+        // The byte-by-byte check that Kani proves on short inputs agrees, on long ones, with the `char` definition
+        // of a control character.
+        #[test]
+        fn a_header_value_is_refused_exactly_when_it_holds_a_control_character(
+            value in "[a \\t\\r\\n\\x00\\x1f\\x7f\\u{80}-\\u{9f}\\u{a0}\\u{c2}\\u{e9}\\u{1f600}]{0,12}",
+        ) {
+            let control = value.chars().any(|c| c != '\t' && c.is_control());
+            prop_assert_eq!(header_refusal("x-ok", &value).is_some(), control, "{:?}", value);
         }
     }
 }

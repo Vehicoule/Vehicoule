@@ -20,6 +20,8 @@ mod host;
 mod manifest;
 mod media;
 mod network;
+#[cfg(kani)]
+mod proof_input;
 
 pub use call::{PluginError, PluginFailure};
 pub use config::{ByteSize, Fuel, HostConfig, HttpBudget, Ticks};
