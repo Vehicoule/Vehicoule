@@ -1,1 +1,4 @@
 # cargo-mutants configuration (ADR 0004). Every surviving mutant fails CI.
+
+# Code compiled only under Kani: mutation testing runs the tests, which never build it. The proofs check it instead.
+exclude_globs = ["crates/vehicoule-core/src/queue/kani_rng.rs", "crates/vehicoule-core/src/queue/proofs.rs"]
