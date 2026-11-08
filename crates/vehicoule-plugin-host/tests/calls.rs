@@ -14,7 +14,7 @@ use common::{
 use vehicoule_plugin_host::{
     AlbumRef, ArtistRef, Artwork, ByteSize, CallReport, Capability, Fuel, HttpResponse,
     InstalledPlugin, Item, ItemKind, LogLevel, Method, NetworkError, PluginError, PluginFailure,
-    PluginHost, Track,
+    PluginHost, ResultFault, Track,
 };
 
 /// A host with the `good` plugin installed; an error says which step failed, and the calling test unwraps it.
@@ -972,6 +972,290 @@ fn a_radio_answer_is_counted_against_the_output_ceiling() {
         let mut long = seed("echo");
         long.title = "a".repeat(len);
         host.radio(&plugin, &long, &[], 0)
+    };
+    let small = measure(1);
+    let base = small.report.output.unwrap().get() - 1;
+    let fits = measure(usize::try_from(MAX_OUTPUT - base).unwrap());
+    assert!(fits.outcome.is_ok(), "{:?}", fits.outcome);
+    assert_eq!(fits.report.output, Some(ByteSize::new(MAX_OUTPUT)));
+    let over = measure(usize::try_from(MAX_OUTPUT - base + 1).unwrap());
+    assert_eq!(
+        over.outcome.unwrap_err(),
+        PluginFailure::OutputTooLarge {
+            size: ByteSize::new(MAX_OUTPUT + 1),
+            limit: ByteSize::new(MAX_OUTPUT),
+        }
+    );
+}
+
+// Resolve (docs/plugin-host-spec.md, sections 3, 5, 6, 7 and 8): the `resolve` plugin's `resolve` does what the track's
+// id says (see `fixtures/src/lib.rs`).
+
+/// A host with the `resolve` plugin installed.
+fn resolve_plugin() -> Result<(PluginHost, InstalledPlugin), String> {
+    let host = host().map_err(|e| e.to_string())?;
+    let plugin = host
+        .install(&fixture("resolve")?)
+        .map_err(|e| e.to_string())?;
+    Ok((host, plugin))
+}
+
+#[test]
+fn the_resolve_plugin_installs_with_the_resolve_capability_only() {
+    let (_, plugin) = resolve_plugin().unwrap();
+    assert_eq!(
+        plugin
+            .manifest()
+            .capabilities()
+            .iter()
+            .copied()
+            .collect::<Vec<_>>(),
+        [Capability::Resolve]
+    );
+}
+
+#[test]
+fn every_field_of_the_track_and_the_request_reaches_the_plugin_and_every_field_of_the_stream_comes_back()
+ {
+    let (host, plugin) = resolve_plugin().unwrap();
+    let mut artist = ArtistRef::default();
+    artist.id = "ar1".to_owned();
+    artist.name = "Artist One".to_owned();
+    let mut track = seed("echo");
+    track.artists = vec![artist];
+    track.duration = Some(Duration::from_millis(215_999));
+    track.isrc = Some("FRZ039800212".to_owned());
+
+    let playable = host
+        .resolve(
+            &plugin,
+            &track,
+            &["bad1".to_owned(), "bad2".to_owned()],
+            Some("good1"),
+        )
+        .outcome
+        .unwrap();
+    assert_eq!(playable.url, "https://a.cdn.example.org/echo");
+    assert_eq!(
+        playable.headers,
+        [
+            (
+                "x-track".to_owned(),
+                "title=Seed;artists=ar1=Artist One;duration=Some(215999);isrc=Some(\"FRZ039800212\")"
+                    .to_owned()
+            ),
+            (
+                "x-request".to_owned(),
+                "rejected=bad1,bad2;preferred=Some(\"good1\")".to_owned()
+            ),
+        ]
+    );
+    assert_eq!(playable.mime, None);
+    assert_eq!(playable.valid_for, None);
+    assert_eq!(playable.matched_id, "echoed");
+}
+
+#[test]
+fn absent_optional_parts_of_the_request_arrive_absent() {
+    let (host, plugin) = resolve_plugin().unwrap();
+    let playable = host
+        .resolve(&plugin, &seed("echo"), &[], None)
+        .outcome
+        .unwrap();
+    assert_eq!(
+        playable.headers[0].1,
+        "title=Seed;artists=;duration=None;isrc=None"
+    );
+    assert_eq!(playable.headers[1].1, "rejected=;preferred=None");
+}
+
+#[test]
+fn the_validity_arrives_as_a_duration_and_the_media_type_as_given() {
+    let (host, plugin) = resolve_plugin().unwrap();
+    let playable = host
+        .resolve(&plugin, &seed("any-id"), &[], None)
+        .outcome
+        .unwrap();
+    assert_eq!(playable.url, "https://a.cdn.example.org/stream");
+    assert_eq!(playable.mime.as_deref(), Some("audio/mp4"));
+    assert_eq!(playable.valid_for, Some(Duration::from_mins(359)));
+    assert_eq!(playable.matched_id, "any-id");
+    assert_eq!(playable.headers, Vec::<(String, String)>::new());
+}
+
+#[test]
+fn each_error_of_the_resolve_plugin_comes_back_as_itself() {
+    let (host, plugin) = resolve_plugin().unwrap();
+    let cases = [
+        ("error:not-found", PluginError::NotFound),
+        ("error:unsupported", PluginError::Unsupported),
+        (
+            "error:rate-limited",
+            PluginError::RateLimited {
+                retry_after: Some(Duration::from_millis(1_500)),
+            },
+        ),
+        (
+            "error:invalid-input",
+            PluginError::InvalidInput("bad track".to_owned()),
+        ),
+        (
+            "error:upstream",
+            PluginError::Upstream("service down".to_owned()),
+        ),
+    ];
+    for (id, expected) in cases {
+        let failure = host
+            .resolve(&plugin, &seed(id), &[], None)
+            .outcome
+            .unwrap_err();
+        assert_eq!(failure, PluginFailure::Plugin(expected), "{id}");
+    }
+}
+
+#[test]
+fn a_stream_on_a_declared_host_is_returned_as_the_plugin_gave_it() {
+    let (host, plugin) = resolve_plugin().unwrap();
+    for url in [
+        "https://api.example.org/stream?id=1",
+        "https://a.cdn.example.org/stream",
+        "https://b.a.cdn.example.org/stream",
+        // The host name is compared in lowercase; the URL is handed on untouched.
+        "https://A.CDN.EXAMPLE.ORG/Stream",
+    ] {
+        let playable = host
+            .resolve(&plugin, &seed(&format!("stream:{url}")), &[], None)
+            .outcome
+            .unwrap_or_else(|failure| panic!("{url}: {failure:?}"));
+        assert_eq!(playable.url, url);
+    }
+}
+
+#[test]
+fn a_stream_on_an_undeclared_host_is_refused_with_the_host_it_named() {
+    let (host, plugin) = resolve_plugin().unwrap();
+    let cases = [
+        ("https://evil.org/stream", "evil.org"),
+        // `*.cdn.example.org` matches subdomains only, never the name itself.
+        ("https://cdn.example.org/stream", "cdn.example.org"),
+        (
+            "https://api.example.org.evil.org/stream",
+            "api.example.org.evil.org",
+        ),
+        ("https://EVIL.org/Stream", "evil.org"),
+    ];
+    for (url, named) in cases {
+        let call = host.resolve(&plugin, &seed(&format!("stream:{url}")), &[], None);
+        assert_eq!(
+            call.outcome,
+            Err(PluginFailure::InvalidResult(
+                ResultFault::StreamHostUndeclared {
+                    host: named.to_owned()
+                }
+            )),
+            "{url}"
+        );
+        // The call ran: its report is kept with the failure.
+        assert!(call.report.fuel_used.get() > 0, "{url}");
+        assert!(call.report.output.is_some(), "{url}");
+    }
+}
+
+#[test]
+fn a_stream_that_is_not_an_https_url_on_a_host_name_is_refused() {
+    let (host, plugin) = resolve_plugin().unwrap();
+    for url in [
+        "",
+        "not a url",
+        "http://a.cdn.example.org/stream",
+        "//a.cdn.example.org/stream",
+        "ftp://a.cdn.example.org/stream",
+        "https://a.cdn.example.org:8443/stream",
+        "https://user@a.cdn.example.org/stream",
+        "https://user:secret@a.cdn.example.org/stream",
+        "https://10.0.0.1/stream",
+        "https://[::1]/stream",
+        "https://a.cdn.example.org\\@evil.org/stream",
+        "https://a.cdn.example.org/a b",
+        "https://a.cdn.example.org/\u{e9}",
+        "https:///stream",
+    ] {
+        let call = host.resolve(&plugin, &seed(&format!("stream:{url}")), &[], None);
+        assert_eq!(
+            call.outcome,
+            Err(PluginFailure::InvalidResult(ResultFault::StreamUrl)),
+            "{url:?}"
+        );
+    }
+}
+
+#[test]
+fn a_stream_over_the_output_ceiling_fails_on_the_ceiling_before_the_host_check() {
+    let (host, plugin) = resolve_plugin().unwrap();
+    let url = format!("https://evil.org/{}", "a".repeat(70_000));
+    let call = host.resolve(&plugin, &seed(&format!("stream:{url}")), &[], None);
+    assert!(
+        matches!(call.outcome, Err(PluginFailure::OutputTooLarge { .. })),
+        "{:?}",
+        call.outcome
+    );
+}
+
+#[test]
+fn a_plugin_that_does_not_provide_resolve_is_not_called_for_it_and_the_other_way_round() {
+    let host = host().unwrap();
+    let search_only = host.install(&fixture("good").unwrap()).unwrap();
+    let call = host.resolve(&search_only, &seed("any-id"), &[], None);
+    assert_eq!(
+        call.outcome,
+        Err(PluginFailure::NotProvided(Capability::Resolve))
+    );
+    assert_eq!(call.report, CallReport::default());
+
+    let resolve_only = host.install(&fixture("resolve").unwrap()).unwrap();
+    let call = host.search(&resolve_only, "daft", &[ItemKind::Track], None);
+    assert_eq!(
+        call.outcome.unwrap_err(),
+        PluginFailure::NotProvided(Capability::Search)
+    );
+    assert_eq!(call.report, CallReport::default());
+}
+
+#[test]
+fn a_resolve_call_reaches_the_network_only_through_the_sandbox() {
+    let network = common::ok_network();
+    let host = host_on(network.clone()).unwrap();
+    let plugin = host.install(&fixture("resolve").unwrap()).unwrap();
+
+    let call = host.resolve(
+        &plugin,
+        &seed("fetch:https://api.example.org/player"),
+        &[],
+        None,
+    );
+    assert_eq!(call.outcome.unwrap().matched_id, "200:ok");
+    assert_eq!(call.report.requests_sent, 1);
+    assert_eq!(
+        network.requests()[0].0.url.as_str(),
+        "https://api.example.org/player"
+    );
+
+    let call = host.resolve(&plugin, &seed("fetch:https://evil.org/"), &[], None);
+    assert_eq!(call.outcome.unwrap().matched_id, "refused-host");
+    assert_eq!(call.report.requests_sent, 0);
+    assert_eq!(call.report.requests_refused, 1);
+    assert_eq!(network.requests().len(), 1);
+}
+
+#[test]
+fn a_stream_is_counted_against_the_output_ceiling() {
+    let (host, plugin) = resolve_plugin().unwrap();
+    // `echo` tells the title back in a header, so a long title makes a long answer; find the title that lands exactly
+    // on the ceiling from what the plugin returned.
+    let measure = |len: usize| {
+        let mut long = seed("echo");
+        long.title = "a".repeat(len);
+        host.resolve(&plugin, &long, &[], None)
     };
     let small = measure(1);
     let base = small.report.output.unwrap().get() - 1;

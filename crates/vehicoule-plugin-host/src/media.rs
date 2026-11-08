@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use crate::ByteSize;
 use crate::bindings::base::vehicoule::plugin::types;
+use crate::bindings::resolve::exports::vehicoule::plugin::resolve;
 use crate::bindings::search::exports::vehicoule::plugin::search;
 
 /// A picture of an item, as the provider serves it.
@@ -141,6 +142,23 @@ pub struct Page {
     pub next: Option<String>,
 }
 
+/// A stream a plugin resolved a track to, as the platform player is given it (section 5, "Streams").
+#[non_exhaustive]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Playable {
+    /// The stream's URL: `https`, on a host the plugin declared, which the host has checked.
+    pub url: String,
+    /// The headers the player sends with its requests, in the plugin's order, as the plugin gave them.
+    pub headers: Vec<(String, String)>,
+    /// The stream's media type, when the plugin says.
+    pub mime: Option<String>,
+    /// How long the URL stays valid from now, when the plugin says: relative, so the plugin needs no clock, and the
+    /// edge turns it into an expiry.
+    pub valid_for: Option<Duration>,
+    /// The provider's id of the item the plugin chose, so that the user can reject it.
+    pub matched_id: String,
+}
+
 /// The size of a returned value, for the output budget (section 6): the bytes of every string, plus one for every
 /// element of every list, so that a long list of empty or small values counts too.
 ///
@@ -209,6 +227,23 @@ impl OutputSize for Track {
             self.album.output_size(),
             self.isrc.output_size(),
             self.artwork.output_size(),
+        ])
+    }
+}
+
+impl OutputSize for (String, String) {
+    fn output_size(&self) -> usize {
+        sum(&[self.0.output_size(), self.1.output_size()])
+    }
+}
+
+impl OutputSize for Playable {
+    fn output_size(&self) -> usize {
+        sum(&[
+            self.url.output_size(),
+            self.headers.output_size(),
+            self.mime.output_size(),
+            self.matched_id.output_size(),
         ])
     }
 }
@@ -401,6 +436,18 @@ impl From<&Track> for types::Track {
                 .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)),
             isrc: track.isrc.clone(),
             artwork: track.artwork.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<resolve::Playable> for Playable {
+    fn from(playable: resolve::Playable) -> Self {
+        Self {
+            url: playable.url,
+            headers: playable.headers,
+            mime: playable.mime,
+            valid_for: playable.valid_for_ms.map(Duration::from_millis),
+            matched_id: playable.matched_id,
         }
     }
 }

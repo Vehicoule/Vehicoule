@@ -10,10 +10,14 @@ use thiserror::Error;
 
 use crate::bindings::base::vehicoule::plugin::types;
 use crate::bindings::radio::RadioPluginPre;
+use crate::bindings::resolve::ResolvePluginPre;
+use crate::bindings::resolve::exports::vehicoule::plugin::resolve as resolve_contract;
 use crate::bindings::search::SearchPluginPre;
 use crate::media::{OutputSize, convert, output_bytes};
+use crate::network::HttpsUrl;
 use crate::{
-    ByteSize, Capability, Fuel, InstalledPlugin, ItemKind, LogEntry, Page, PluginHost, Track,
+    ByteSize, Capability, Fuel, InstalledPlugin, ItemKind, LogEntry, Page, Playable, PluginHost,
+    Track,
 };
 
 /// An error the plugin itself returned, as the contract names them.
@@ -81,9 +85,27 @@ pub enum PluginFailure {
         /// The ceiling.
         limit: ByteSize,
     },
+    /// The plugin returned a value that breaks a rule of the host (section 7), not one of the contract's errors.
+    #[error("the plugin returned an invalid result: {0}")]
+    InvalidResult(ResultFault),
     /// Wasmtime failed for a reason that is none of the above.
     #[error("the Wasm runtime failed: {0}")]
     Runtime(String),
+}
+
+/// Which rule of the host a value broke (section 5, "Streams").
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum ResultFault {
+    /// A stream URL that is not `https` on a host name, without credentials or a port.
+    #[error("the stream URL is not an https URL on a host name")]
+    StreamUrl,
+    /// A stream on a host the plugin did not declare.
+    #[error("the stream is on {host}, which the plugin did not declare")]
+    StreamHostUndeclared {
+        /// The stream's host, lowercase.
+        host: String,
+    },
 }
 
 /// What one call used, whether it returned a value or failed (section 7), for the budgets' measurements
@@ -209,6 +231,45 @@ impl PluginHost {
         self.bounded(answer.map(|answer| answer.map(convert)), report)
     }
 
+    /// The stream `track` resolves to, which the plugin picks among its own items.
+    ///
+    /// `track` may come from another plugin: the plugin finds its own match for it. `rejected` holds ids the user said
+    /// were the wrong match, which are the plugin's own; `preferred` is an id the user chose. The host passes them on
+    /// as they are and does not check that the answer's `matched_id` respects them: it reports, the core decides
+    /// (spec, section 1). It does check the stream: the URL must be `https` on a host name, and on a host the plugin
+    /// declared, because the platform player will fetch it (section 5). Its headers are passed on as the plugin gave
+    /// them.
+    ///
+    /// The outcome is a [`PluginFailure`] as for [`PluginHost::search`], with [`PluginFailure::InvalidResult`] for a
+    /// stream the host refuses.
+    #[must_use]
+    pub fn resolve(
+        &self,
+        plugin: &InstalledPlugin,
+        track: &Track,
+        rejected: &[String],
+        preferred: Option<&str>,
+    ) -> Reported<Playable> {
+        let request = resolve_contract::Request {
+            track: types::Track::from(track),
+            rejected: rejected.to_vec(),
+            preferred: preferred.map(str::to_owned),
+        };
+        let (answer, report) = self.call(plugin, Capability::Resolve, |store, pre| {
+            let instance = ResolvePluginPre::new(pre.clone())?.instantiate(&mut *store)?;
+            instance
+                .vehicoule_plugin_resolve()
+                .call_resolve(store, &request)
+        });
+        let mut reported = self.bounded(answer.map(|answer| answer.map(Playable::from)), report);
+        if let Ok(playable) = &reported.outcome
+            && let Err(fault) = check_stream(plugin, &playable.url)
+        {
+            reported.outcome = Err(PluginFailure::InvalidResult(fault));
+        }
+        reported
+    }
+
     /// The plugin's answer, or the failure it names, once its size is checked against the output budget and written
     /// in the report. A plugin error's text counts too: it is output like any other.
     fn bounded<T: OutputSize>(
@@ -237,6 +298,18 @@ impl PluginHost {
             answer.map_err(PluginFailure::Plugin)
         };
         Reported { outcome, report }
+    }
+}
+
+/// A stream URL against the plugin's declared hosts (section 5): the same URL rules as its requests, then its hosts.
+fn check_stream(plugin: &InstalledPlugin, url: &str) -> Result<(), ResultFault> {
+    let url = HttpsUrl::parse(url).map_err(|_| ResultFault::StreamUrl)?;
+    if plugin.manifest().allows_host(url.host()) {
+        Ok(())
+    } else {
+        Err(ResultFault::StreamHostUndeclared {
+            host: url.host().to_owned(),
+        })
     }
 }
 
