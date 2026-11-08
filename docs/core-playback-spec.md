@@ -272,6 +272,40 @@ so an entry gets at most one new source after an expiry between two user intents
 - **[Kani]** A timer, a failure or an expiry that is late changes nothing and sends nothing.
 - **[Kani]** Between two user intents, an entry gets at most one new resolution after an expiry.
 
+### Failed entries in the queue
+
+The rules at the top of this section, for the queue of section 3. The queue owns the marks and the count below; the
+session (section 2) calls `fail` when its player sends `Fail`, and stops when `fail` gives no entry.
+
+State. The queue keeps the set of entries **failed in the current pass**, by entry id, and `skips`, the automatic skips
+in a row. Both start empty and at 0.
+
+Operations:
+
+- `fail(e)`, for the session: the current entry `e` failed. The queue marks `e`, adds one to `skips`, and moves to the
+  next playable entry, which it returns: the first entry after `e` in the play order that is not marked. It moves as
+  `Next` does with `Requested` (section 3): with repeat `Off` or `One` it does not wrap, with `All` it does. It returns
+  no entry, and leaves `current` on `e`, when there is none before the end (repeat `Off` or `One`), or when `skips` has
+  reached the number of entries.
+- A pass ends when the queue **wraps**, that is when a move with repeat `All` goes from the last entry of the play order
+  to the first: every mark is cleared at that move, then the move looks for an unmarked entry as above.
+- `Next` and `Previous` skip marked entries the same way, in their own direction. When every entry ahead is marked,
+  they behave as at the end of the queue (section 3).
+- `JumpTo { e }` clears the mark of `e`: the user acts on that entry, so it is tried again.
+- `skips` goes back to 0 on every operation but `fail`: a user operation (section 3), or `Next` with `Finished`, which
+  says that an entry played to its end.
+- `Remove { e }` drops the mark of `e`. `Replace` and `Clear` drop every mark. `Move`, `SetRepeat` and `SetShuffle`
+  keep the marks, which follow the entries by id.
+
+- `e` in `fail(e)` that is not the current entry changes nothing and returns no entry: only the entry being played can
+  fail, and a late `Fail` names one the session left.
+- With repeat `All`, a failing entry can come back after a wrap, as the pass rule says; `skips` is what stops a queue
+  where every entry fails: the session stops after as many failures in a row as there are entries, and says so in the
+  snapshot.
+- **[Kani]** A marked entry never becomes current by `fail`, `Next` or `Previous` within a pass.
+- **[Kani]** `skips` never exceeds the number of entries, and `fail` gives no entry once it reaches it.
+- **[Kani]** `fail` keeps the queue's invariants (section 3), loses no entry and adds none.
+
 ## 6. Persistence and the black box
 
 - The queue (entries, source, `current`, position, repeat, shuffle) is persisted through a `Persist` command on every
