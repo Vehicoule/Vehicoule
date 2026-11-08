@@ -234,7 +234,9 @@ fn each_request_takes_the_next_number() {
             );
             assert!(player.next == next.following());
         }
-        None => assert!(player.next == next),
+        None => {
+            assert!(player.next == next);
+        }
     }
 }
 
