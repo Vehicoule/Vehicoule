@@ -104,12 +104,12 @@ snapshots, on every platform. That is what makes the black box replay and the Ka
 
 ```
 Idle
-Resolving { entry, from, request }             waiting for the resolver to give a playable source
-Loading   { entry, source, from, duration }    the platform player is opening it, to play from `from`
-Playing   { entry, anchor, duration }
-Paused    { entry, position, duration }
-Buffering { entry, position, duration }
-Stopped   { entry, position }                  after an explicit stop; resumable
+Resolving { entry, from, request, timer, renewal }            waiting for the resolver to give a playable source
+Loading   { entry, source, from, duration, timer, renewal }   the platform player is opening it, to play from `from`
+Playing   { entry, anchor, duration, renewal }
+Paused    { entry, position, duration, renewal }
+Buffering { entry, position, duration, timer, renewal }
+Stopped   { entry, position }                                 after an explicit stop; resumable
 WaitingForNetwork { entry }          offline, nothing downloaded ahead (section 3, Offline)
 ```
 
@@ -118,7 +118,8 @@ Errors are not a resting state: a failure moves the session on (section 5) and i
 `from` is the position playback starts at: zero for a new entry, the kept position when a stopped entry resumes.
 `duration` is the media's duration when the resolver knew it, kept from the resolution while the source is loaded, so
 that positions are clamped to it (Position, below). `request` identifies the `Resolve` the player waits for (Events and
-transitions, below).
+transitions, below). `timer` and `renewal` come from section 5: the timer a waiting state is guarded by, and whether
+the entry may still get a new source after an expiry.
 
 ### Events and transitions
 
@@ -187,6 +188,7 @@ Commands: `Resolve { entry, request }`, `Load { source, from }`, `Play`, `Pause`
 - `Pause` and `Seek` before the platform first reports `Playing` (in `Resolving` and `Loading`) change nothing: the
   shell shows them unavailable in those states, from the snapshot.
 - A stopped entry resumes from a new resolution: its source may have expired while it was stopped.
+- The rows above carry `renewal` along, and arm a timer on every move into a waiting state, as section 5 says.
 
 ### Position
 
@@ -219,6 +221,56 @@ Commands: `Resolve { entry, request }`, `Load { source, from }`, `Play`, `Pause`
   values. Their real values are set from measurements (section 7).
 - **[Kani]** A timer that fires after the state it guarded has been left does nothing.
 - Retries, timeouts and fallbacks are never stacked: there is exactly one rule per failure, above.
+
+### Player events and transitions
+
+The player of section 4 takes these events and sends these commands too. Its table still holds; the table below adds
+rows to it, and any other pair still changes nothing.
+
+Events:
+
+- From the resolver: `ResolveFailed { request }`, the `Resolve` that carried `request` failed.
+- From the platform player, each naming the entry it is about: `Failed { entry }`, it cannot open or play the source;
+  `Expired { entry }`, it reports the source expired or forbidden.
+- From the runner: `TimerFired { timer }`, the timer armed with that number fired.
+
+Commands:
+
+- `ArmTimer { timer, after }`, for the runner: give `TimerFired { timer }` once `after` has passed. There is no command
+  to disarm a timer: one that fires once the player no longer waits with it is late and changes nothing.
+- `Fail { entry, failure }`, for the session and not for the edges: `entry` failed, and the session moves on as the
+  rules above say. `failure` is `Resolution` (`ResolveFailed`), `Playback` (`Failed`), `Expiry` (a second expiry) or
+  `Deadline` (`TimerFired`), so that the snapshot's notice can say which.
+
+Timers. `Resolving`, `Loading` and `Buffering` wait with a timer. Every move into one of them arms a new one, also from
+the same state (a second seek while buffering): the row's commands end with `ArmTimer { t, deadline }`, where `t` is a
+new timer number, as `r` is for requests, and `deadline` is the configured deadline of the state entered. A move out of
+a waiting state needs nothing more: the timer it waited with becomes late.
+
+Renewal. Every state with an entry but `Stopped` carries `renewal`, `Available` or `Spent`. `Start`, and `Resume` from
+`Stopped`, give `Available`: a user's intent is a new try of the entry. Other rows carry it along. An expiry spends it,
+so an entry gets at most one new source after an expiry between two user intents, whatever plays in between.
+
+| State | Event | Next state | Commands |
+|---|---|---|---|
+| `Resolving { e, r, .. }` | `ResolveFailed { r }` | `Idle` | `Fail { e, Resolution }` |
+| `Loading`, `Playing`, `Paused` or `Buffering`, on `e` | `Failed { e }` | `Idle` | `Stop`, then `Fail { e, Playback }` |
+| `Loading`, `Playing`, `Paused` or `Buffering`, on `e`, renewal `Available` | `Expired { e }` | `Resolving { e, position, r, t, Spent }` | `Stop`, `Resolve { e, r }`, `ArmTimer { t, resolving }` |
+| `Loading`, `Playing`, `Paused` or `Buffering`, on `e`, renewal `Spent` | `Expired { e }` | `Idle` | `Stop`, then `Fail { e, Expiry }` |
+| `Resolving`, `Loading` or `Buffering` on `e`, waiting with `t` | `TimerFired { t }` | `Idle` | `Stop` when a source was loaded, then `Fail { e, Deadline }` |
+
+- `position` in `Expired` is the position of the state left, as for `Stop` (section 4). It is where playback resumes
+  once the new source is loaded.
+- A failure, an expiry or a timer about another entry, another request or another timer than the player's is late and
+  changes nothing. `Stopped` and `Idle` wait for nothing, so every timer there is late; and the edges give no report
+  about a released source (section 4), so no failure or expiry reaches `Stopped` or `Idle` from the source stopped.
+- An expiry is not a user intent but sends `Resolve`: it never happens in `Stopped` or `Idle`, which hold no source, so
+  the ownership invariant of section 4 still holds.
+- An event sends at most three commands: `Stop`, `Resolve` and `ArmTimer`, for `Start` from a loaded source and for a
+  first expiry.
+- **[Kani]** The player arms a timer on every move into a waiting state, and waits with the last timer it armed.
+- **[Kani]** A timer, a failure or an expiry that is late changes nothing and sends nothing.
+- **[Kani]** Between two user intents, an entry gets at most one new resolution after an expiry.
 
 ## 6. Persistence and the black box
 
