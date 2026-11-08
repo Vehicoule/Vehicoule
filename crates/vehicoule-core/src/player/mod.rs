@@ -13,7 +13,9 @@ mod proofs;
 #[cfg(test)]
 mod tests;
 
-pub use machine::{Command, Commands, Event, Player, Request, State};
+pub use machine::{
+    Command, Commands, Deadlines, Event, Failure, Player, Renewal, Request, State, Timer,
+};
 
 use crate::time::Instant;
 use std::time::Duration;

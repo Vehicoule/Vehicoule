@@ -184,8 +184,8 @@ proptest! {
         prop_assert_eq!(anchor.position_at(now, None), Duration::from_nanos(position.checked_add(elapsed).unwrap()));
     }
 }
-
-// The player's transitions (core spec, section 4, Events and transitions). Entries are numbers, sources strings.
+// The player's transitions (core spec, section 4, Events and transitions, and section 5, Player events and
+// transitions). Entries are numbers, sources strings.
 
 type TestPlayer = Player<u8, &'static str>;
 type TestState = State<u8, &'static str>;
@@ -198,23 +198,48 @@ const NONE: [TestCommand; 0] = [];
 const AWAITED: Request = Request(3);
 /// The number of the next request of a player built below.
 const NEXT: Request = Request(4);
+/// The timer the waiting states built below wait with.
+const WAITING: Timer = Timer(5);
+/// The number of the next timer of a player built below.
+const NEXT_TIMER: Timer = Timer(6);
+/// Arbitrary deadlines, each different so that a test sees which one was armed (core spec, section 5).
+const DEADLINES: Deadlines = Deadlines::new(
+    Duration::from_millis(1_000),
+    Duration::from_millis(2_000),
+    Duration::from_millis(3_000),
+);
+const AVAILABLE: Renewal = Renewal::Available;
 
 fn commands(player: &mut TestPlayer, now: u64, event: TestEvent) -> Vec<TestCommand> {
     player.handle(at(now), event).into_iter().collect()
 }
 
 fn player_in(state: TestState) -> TestPlayer {
-    let mut player = TestPlayer::new();
+    let mut player = TestPlayer::new(DEADLINES);
     player.state = state;
     player.next = NEXT;
+    player.next_timer = NEXT_TIMER;
     player
 }
 
+/// The arming of the player's next timer for `after`.
+fn arm(after: Duration) -> TestCommand {
+    Command::ArmTimer {
+        timer: NEXT_TIMER,
+        after,
+    }
+}
+
 fn playing(entry: u8, reported: u64, position: u64) -> TestState {
+    playing_with(entry, reported, position, AVAILABLE)
+}
+
+fn playing_with(entry: u8, reported: u64, position: u64, renewal: Renewal) -> TestState {
     State::Playing {
         entry,
         anchor: Anchor::new(at(reported), ms(position), Rate::NORMAL),
         duration: Some(ms(100_000)),
+        renewal,
     }
 }
 
@@ -223,35 +248,61 @@ fn paused(entry: u8, position: u64) -> TestState {
         entry,
         position: ms(position),
         duration: Some(ms(100_000)),
+        renewal: AVAILABLE,
     }
 }
 
 fn buffering(entry: u8, position: u64) -> TestState {
+    buffering_with(entry, position, WAITING)
+}
+
+fn buffering_with(entry: u8, position: u64, timer: Timer) -> TestState {
     State::Buffering {
         entry,
         position: ms(position),
         duration: Some(ms(100_000)),
+        timer,
+        renewal: AVAILABLE,
     }
 }
 
 fn loading(entry: u8, from: u64) -> TestState {
+    loading_with(entry, from, WAITING)
+}
+
+fn loading_with(entry: u8, from: u64, timer: Timer) -> TestState {
     State::Loading {
         entry,
         source: SOURCE,
         from: ms(from),
         duration: Some(ms(100_000)),
+        timer,
+        renewal: AVAILABLE,
     }
 }
 
 fn resolving(entry: u8, from: u64) -> TestState {
-    resolving_for(entry, from, AWAITED)
+    resolving_with(entry, from, AWAITED, WAITING, AVAILABLE)
 }
 
-fn resolving_for(entry: u8, from: u64, request: Request) -> TestState {
+/// What a player built below resolves after a `Start` or a `Resume` from `Stopped`.
+fn resolving_next(entry: u8, from: u64) -> TestState {
+    resolving_with(entry, from, NEXT, NEXT_TIMER, AVAILABLE)
+}
+
+fn resolving_with(
+    entry: u8,
+    from: u64,
+    request: Request,
+    timer: Timer,
+    renewal: Renewal,
+) -> TestState {
     State::Resolving {
         entry,
         from: ms(from),
         request,
+        timer,
+        renewal,
     }
 }
 
@@ -275,42 +326,55 @@ fn every_state() -> Vec<TestState> {
     ]
 }
 
-#[test]
-fn a_new_player_is_idle() {
-    let player = TestPlayer::new();
-    assert_eq!(player.state(), &State::Idle);
-    assert_eq!(player.state().entry(), None);
-    assert_eq!(player.state().position_at(at(0)), None);
+fn holds_a_source(state: &TestState) -> bool {
+    matches!(
+        state,
+        State::Loading { .. }
+            | State::Playing { .. }
+            | State::Paused { .. }
+            | State::Buffering { .. }
+    )
 }
 
 #[test]
-fn start_resolves_the_entry_from_zero_and_releases_a_loaded_source() {
+fn a_new_player_is_idle() {
+    let player = TestPlayer::new(DEADLINES);
+    assert_eq!(player.state(), &State::Idle);
+    assert_eq!(player.state().entry(), None);
+    assert_eq!(player.state().position_at(at(0)), None);
+    assert_eq!(player.state().timer(), None);
+    assert_eq!(player.state().renewal(), None);
+}
+
+#[test]
+fn start_resolves_the_entry_from_zero_releases_a_loaded_source_and_arms_the_resolving_deadline() {
     for state in every_state() {
-        let had_source = matches!(
-            state,
-            State::Loading { .. }
-                | State::Playing { .. }
-                | State::Paused { .. }
-                | State::Buffering { .. }
-        );
         let mut player = player_in(state.clone());
         let sent = commands(&mut player, 9_000, Event::Start { entry: 2 });
         let resolve = Command::Resolve {
             entry: 2,
             request: NEXT,
         };
-        let expected = if had_source {
-            vec![Command::Stop, resolve]
+        let expected = if holds_a_source(&state) {
+            vec![Command::Stop, resolve, arm(DEADLINES.resolving())]
         } else {
-            vec![resolve]
+            vec![resolve, arm(DEADLINES.resolving())]
         };
         assert_eq!(sent, expected, "from {state:?}");
-        assert_eq!(player.state(), &resolving_for(2, 0, NEXT), "from {state:?}");
+        assert_eq!(player.state(), &resolving_next(2, 0), "from {state:?}");
     }
 }
 
 #[test]
-fn the_answer_to_the_awaited_request_loads_its_source_from_where_it_starts() {
+fn start_makes_the_renewal_available_again() {
+    let mut player = player_in(playing_with(1, 0, 0, Renewal::Spent));
+    commands(&mut player, 0, Event::Start { entry: 1 });
+    assert_eq!(player.state().renewal(), Some(AVAILABLE));
+}
+
+#[test]
+fn the_answer_to_the_awaited_request_loads_its_source_from_where_it_starts_and_arms_the_loading_deadline()
+ {
     let mut player = player_in(resolving(1, 4_000));
     let sent = commands(
         &mut player,
@@ -323,12 +387,15 @@ fn the_answer_to_the_awaited_request_loads_its_source_from_where_it_starts() {
     );
     assert_eq!(
         sent,
-        [Command::Load {
-            source: SOURCE,
-            from: ms(4_000)
-        }]
+        [
+            Command::Load {
+                source: SOURCE,
+                from: ms(4_000)
+            },
+            arm(DEADLINES.loading())
+        ]
     );
-    assert_eq!(player.state(), &loading(1, 4_000));
+    assert_eq!(player.state(), &loading_with(1, 4_000, NEXT_TIMER));
 }
 
 #[test]
@@ -345,7 +412,8 @@ fn the_platform_playing_moves_loading_playing_and_buffering_to_playing_on_the_ne
             &State::Playing {
                 entry: 1,
                 anchor,
-                duration: Some(ms(100_000))
+                duration: Some(ms(100_000)),
+                renewal: AVAILABLE,
             },
             "from {state:?}"
         );
@@ -374,10 +442,13 @@ fn pause_while_buffering_keeps_the_position_it_waited_at() {
 }
 
 #[test]
-fn resume_while_paused_plays_and_waits_for_the_platform() {
+fn resume_while_paused_plays_and_waits_for_the_platform_with_the_buffering_deadline() {
     let mut player = player_in(paused(1, 7_000));
-    assert_eq!(commands(&mut player, 0, Event::Resume), [Command::Play]);
-    assert_eq!(player.state(), &buffering(1, 7_000));
+    assert_eq!(
+        commands(&mut player, 0, Event::Resume),
+        [Command::Play, arm(DEADLINES.buffering())]
+    );
+    assert_eq!(player.state(), &buffering_with(1, 7_000, NEXT_TIMER));
 }
 
 #[test]
@@ -398,18 +469,21 @@ fn the_platform_paused_updates_the_paused_position() {
 }
 
 #[test]
-fn the_platform_buffering_while_playing_waits_at_its_position() {
+fn the_platform_buffering_while_playing_waits_at_its_position_with_the_buffering_deadline() {
     let mut player = player_in(playing(1, 0, 0));
     let event = Event::Buffering {
         entry: 1,
         position: ms(12_000),
     };
-    assert_eq!(commands(&mut player, 12_000, event), NONE);
-    assert_eq!(player.state(), &buffering(1, 12_000));
+    assert_eq!(
+        commands(&mut player, 12_000, event),
+        [arm(DEADLINES.buffering())]
+    );
+    assert_eq!(player.state(), &buffering_with(1, 12_000, NEXT_TIMER));
 }
 
 #[test]
-fn seek_while_playing_or_buffering_waits_for_the_platform_at_the_new_position() {
+fn seek_while_playing_or_buffering_waits_for_the_platform_at_the_new_position_with_a_new_timer() {
     for state in [playing(1, 0, 0), buffering(1, 500)] {
         let mut player = player_in(state.clone());
         let sent = commands(
@@ -421,12 +495,19 @@ fn seek_while_playing_or_buffering_waits_for_the_platform_at_the_new_position() 
         );
         assert_eq!(
             sent,
-            [Command::Seek {
-                position: ms(30_000)
-            }],
+            [
+                Command::Seek {
+                    position: ms(30_000)
+                },
+                arm(DEADLINES.buffering())
+            ],
             "from {state:?}"
         );
-        assert_eq!(player.state(), &buffering(1, 30_000), "from {state:?}");
+        assert_eq!(
+            player.state(),
+            &buffering_with(1, 30_000, NEXT_TIMER),
+            "from {state:?}"
+        );
     }
 }
 
@@ -501,18 +582,29 @@ fn resume_while_stopped_resolves_the_entry_again_from_where_it_stopped() {
     let mut player = player_in(stopped(1, 7_000));
     assert_eq!(
         commands(&mut player, 0, Event::Resume),
-        [Command::Resolve {
-            entry: 1,
-            request: NEXT
-        }]
+        [
+            Command::Resolve {
+                entry: 1,
+                request: NEXT
+            },
+            arm(DEADLINES.resolving())
+        ]
     );
-    assert_eq!(player.state(), &resolving_for(1, 7_000, NEXT));
+    assert_eq!(player.state(), &resolving_next(1, 7_000));
 }
 
 /// The request of the `Resolve` among `commands`.
 fn request_of(commands: &[TestCommand]) -> Option<Request> {
     commands.iter().find_map(|command| match command {
         Command::Resolve { request, .. } => Some(*request),
+        _ => None,
+    })
+}
+
+/// The timer of the `ArmTimer` among `commands`.
+fn timer_of(commands: &[TestCommand]) -> Option<Timer> {
+    commands.iter().find_map(|command| match command {
+        Command::ArmTimer { timer, .. } => Some(*timer),
         _ => None,
     })
 }
@@ -525,10 +617,14 @@ fn answer(request: Request, source: &'static str) -> TestEvent {
     }
 }
 
+fn first_start(player: &mut TestPlayer) -> Request {
+    request_of(&commands(player, 0, Event::Start { entry: 1 })).unwrap()
+}
+
 #[test]
 fn the_answer_to_a_request_made_before_a_stop_is_late_once_resumed() {
-    let mut player = TestPlayer::new();
-    let first = request_of(&commands(&mut player, 0, Event::Start { entry: 1 })).unwrap();
+    let mut player = TestPlayer::new(DEADLINES);
+    let first = first_start(&mut player);
     commands(&mut player, 100, Event::Stop);
     let second = request_of(&commands(&mut player, 200, Event::Resume)).unwrap();
     assert_ne!(first, second);
@@ -537,43 +633,56 @@ fn the_answer_to_a_request_made_before_a_stop_is_late_once_resumed() {
     assert_eq!(commands(&mut player, 300, answer(first, "expired")), NONE);
     assert_eq!(player, before);
 
+    let sent = commands(&mut player, 400, answer(second, "fresh"));
     assert_eq!(
-        commands(&mut player, 400, answer(second, "fresh")),
-        [Command::Load {
+        sent.first(),
+        Some(&Command::Load {
             source: "fresh",
             from: Duration::ZERO
-        }]
+        })
     );
 }
 
 #[test]
 fn the_answer_to_an_earlier_start_of_the_same_entry_is_late() {
-    let mut player = TestPlayer::new();
-    let first = request_of(&commands(&mut player, 0, Event::Start { entry: 1 })).unwrap();
+    let mut player = TestPlayer::new(DEADLINES);
+    let first = first_start(&mut player);
     let second = request_of(&commands(&mut player, 100, Event::Start { entry: 1 })).unwrap();
     assert_ne!(first, second);
 
     let before = player.clone();
     assert_eq!(commands(&mut player, 200, answer(first, "earlier")), NONE);
     assert_eq!(player, before);
+    let sent = commands(&mut player, 300, answer(second, "awaited"));
     assert_eq!(
-        commands(&mut player, 300, answer(second, "awaited")),
-        [Command::Load {
+        sent.first(),
+        Some(&Command::Load {
             source: "awaited",
             from: Duration::ZERO
-        }]
+        })
     );
 }
 
 #[test]
 fn the_request_counter_wraps_instead_of_overflowing() {
-    let mut player = TestPlayer::new();
+    let mut player = TestPlayer::new(DEADLINES);
     player.next = Request(u64::MAX);
     assert_eq!(
         request_of(&commands(&mut player, 0, Event::Start { entry: 1 })),
         Some(Request(u64::MAX))
     );
     assert_eq!(player.next, Request(0));
+}
+
+#[test]
+fn the_timer_counter_wraps_instead_of_overflowing() {
+    let mut player = TestPlayer::new(DEADLINES);
+    player.next_timer = Timer(u64::MAX);
+    assert_eq!(
+        timer_of(&commands(&mut player, 0, Event::Start { entry: 1 })),
+        Some(Timer(u64::MAX))
+    );
+    assert_eq!(player.next_timer, Timer(0));
 }
 
 #[test]
@@ -585,8 +694,164 @@ fn the_end_of_the_entry_while_playing_or_buffering_goes_idle_with_no_command() {
     }
 }
 
-/// Every event but `Start` and `Stop`, about entry `entry` or answering `request` where it names one.
-fn events_about(entry: u8, request: Request) -> Vec<TestEvent> {
+// Failures, expiries and deadlines (core spec, section 5, Player events and transitions).
+
+#[test]
+fn a_failed_resolution_of_the_awaited_request_fails_the_entry() {
+    let mut player = player_in(resolving(1, 4_000));
+    assert_eq!(
+        commands(&mut player, 0, Event::ResolveFailed { request: AWAITED }),
+        [Command::Fail {
+            entry: 1,
+            failure: Failure::Resolution
+        }]
+    );
+    assert_eq!(player.state(), &State::Idle);
+}
+
+#[test]
+fn a_failed_source_is_released_and_its_entry_fails() {
+    for state in [
+        loading(1, 0),
+        playing(1, 0, 0),
+        paused(1, 0),
+        buffering(1, 0),
+    ] {
+        let mut player = player_in(state.clone());
+        assert_eq!(
+            commands(&mut player, 0, Event::Failed { entry: 1 }),
+            [
+                Command::Stop,
+                Command::Fail {
+                    entry: 1,
+                    failure: Failure::Playback
+                }
+            ],
+            "from {state:?}"
+        );
+        assert_eq!(player.state(), &State::Idle, "from {state:?}");
+    }
+}
+
+#[test]
+fn a_first_expiry_releases_the_source_and_resolves_the_entry_again_from_where_it_was() {
+    let cases = [
+        (loading(1, 4_000), 4_000),
+        (playing(1, 1_000, 2_000), 5_500),
+        (paused(1, 7_000), 7_000),
+        (buffering(1, 7_000), 7_000),
+    ];
+    for (state, position) in cases {
+        let mut player = player_in(state.clone());
+        assert_eq!(
+            commands(&mut player, 4_500, Event::Expired { entry: 1 }),
+            [
+                Command::Stop,
+                Command::Resolve {
+                    entry: 1,
+                    request: NEXT
+                },
+                arm(DEADLINES.resolving())
+            ],
+            "from {state:?}"
+        );
+        assert_eq!(
+            player.state(),
+            &resolving_with(1, position, NEXT, NEXT_TIMER, Renewal::Spent),
+            "from {state:?}"
+        );
+    }
+}
+
+#[test]
+fn the_renewal_is_kept_through_the_new_source_and_a_second_expiry_fails_the_entry() {
+    let mut player = player_in(playing(1, 0, 0));
+    let renewed = request_of(&commands(&mut player, 1_000, Event::Expired { entry: 1 })).unwrap();
+    commands(&mut player, 1_100, answer(renewed, "renewed"));
+    let anchor = Anchor::new(at(1_200), ms(1_000), Rate::NORMAL);
+    commands(&mut player, 1_200, Event::Playing { entry: 1, anchor });
+    assert_eq!(player.state().renewal(), Some(Renewal::Spent));
+
+    assert_eq!(
+        commands(&mut player, 60_000, Event::Expired { entry: 1 }),
+        [
+            Command::Stop,
+            Command::Fail {
+                entry: 1,
+                failure: Failure::Expiry
+            }
+        ]
+    );
+    assert_eq!(player.state(), &State::Idle);
+}
+
+#[test]
+fn resume_after_a_stop_makes_the_renewal_available_again() {
+    let mut player = player_in(playing_with(1, 0, 0, Renewal::Spent));
+    commands(&mut player, 0, Event::Stop);
+    commands(&mut player, 0, Event::Resume);
+    assert_eq!(player.state().renewal(), Some(AVAILABLE));
+}
+
+#[test]
+fn the_timer_a_waiting_state_waits_with_fails_its_entry() {
+    for state in [resolving(1, 0), loading(1, 0), buffering(1, 0)] {
+        let mut player = player_in(state.clone());
+        let mut expected = Vec::new();
+        if holds_a_source(&state) {
+            expected.push(Command::Stop);
+        }
+        expected.push(Command::Fail {
+            entry: 1,
+            failure: Failure::Deadline,
+        });
+        assert_eq!(
+            commands(&mut player, 0, Event::TimerFired { timer: WAITING }),
+            expected,
+            "in {state:?}"
+        );
+        assert_eq!(player.state(), &State::Idle, "in {state:?}");
+    }
+}
+
+#[test]
+fn a_timer_of_a_state_left_is_late() {
+    let mut player = TestPlayer::new(DEADLINES);
+    let sent = commands(&mut player, 0, Event::Start { entry: 1 });
+    let resolving_timer = timer_of(&sent).unwrap();
+    let request = request_of(&sent).unwrap();
+    let loading_timer = timer_of(&commands(&mut player, 100, answer(request, SOURCE))).unwrap();
+    assert_ne!(resolving_timer, loading_timer);
+
+    let before = player.clone();
+    assert_eq!(
+        commands(
+            &mut player,
+            200,
+            Event::TimerFired {
+                timer: resolving_timer
+            }
+        ),
+        NONE
+    );
+    assert_eq!(player, before);
+}
+
+#[test]
+fn a_second_seek_while_buffering_waits_with_a_new_timer_and_the_first_one_is_late() {
+    let mut player = player_in(buffering(1, 0));
+    commands(&mut player, 0, Event::Seek { position: ms(10) });
+    assert_eq!(player.state().timer(), Some(NEXT_TIMER));
+    let before = player.clone();
+    assert_eq!(
+        commands(&mut player, 0, Event::TimerFired { timer: WAITING }),
+        NONE
+    );
+    assert_eq!(player, before);
+}
+
+/// Every event but `Start` and `Stop`, about entry `entry`, answering `request` or firing `timer` where it names one.
+fn events_about(entry: u8, request: Request, timer: Timer) -> Vec<TestEvent> {
     vec![
         Event::Pause,
         Event::Resume,
@@ -596,6 +861,7 @@ fn events_about(entry: u8, request: Request) -> Vec<TestEvent> {
             source: SOURCE,
             duration: None,
         },
+        Event::ResolveFailed { request },
         Event::Playing {
             entry,
             anchor: Anchor::new(at(0), ms(1), Rate::NORMAL),
@@ -609,70 +875,78 @@ fn events_about(entry: u8, request: Request) -> Vec<TestEvent> {
             position: ms(1),
         },
         Event::Ended { entry },
+        Event::Failed { entry },
+        Event::Expired { entry },
+        Event::TimerFired { timer },
     ]
 }
 
-/// The (state kind, event kind) pairs of the spec's table, besides `Start` and `Stop`.
+/// The (state kind, event kind) pairs of the spec's tables, besides `Start` and `Stop`.
 fn in_the_table(state: &TestState, event: &TestEvent) -> bool {
     matches!(
         (state, event),
-        (State::Resolving { .. }, Event::Resolved { .. })
-            | (
-                State::Loading { .. } | State::Playing { .. } | State::Buffering { .. },
-                Event::Playing { .. }
-            )
-            | (
-                State::Playing { .. } | State::Buffering { .. },
-                Event::Pause | Event::Seek { .. } | Event::Ended { .. }
-            )
-            | (
-                State::Paused { .. },
-                Event::Resume | Event::Paused { .. } | Event::Seek { .. }
-            )
-            | (State::Playing { .. }, Event::Buffering { .. })
+        (
+            State::Resolving { .. },
+            Event::Resolved { .. } | Event::ResolveFailed { .. }
+        ) | (
+            State::Loading { .. } | State::Playing { .. } | State::Buffering { .. },
+            Event::Playing { .. }
+        ) | (
+            State::Playing { .. } | State::Buffering { .. },
+            Event::Pause | Event::Seek { .. } | Event::Ended { .. }
+        ) | (
+            State::Paused { .. },
+            Event::Resume | Event::Paused { .. } | Event::Seek { .. }
+        ) | (State::Playing { .. }, Event::Buffering { .. })
             | (State::Stopped { .. }, Event::Seek { .. } | Event::Resume)
+            | (
+                State::Loading { .. }
+                    | State::Playing { .. }
+                    | State::Paused { .. }
+                    | State::Buffering { .. },
+                Event::Failed { .. } | Event::Expired { .. }
+            )
+            | (
+                State::Resolving { .. } | State::Loading { .. } | State::Buffering { .. },
+                Event::TimerFired { .. }
+            )
     )
 }
 
 #[test]
-fn an_event_outside_the_table_changes_nothing_and_sends_nothing() {
+fn an_event_outside_the_tables_changes_nothing_and_sends_nothing() {
     for state in every_state() {
-        for event in events_about(1, AWAITED) {
+        for event in events_about(1, AWAITED, WAITING) {
             if in_the_table(&state, &event) {
                 continue;
             }
             let mut player = player_in(state.clone());
+            let before = player.clone();
             assert_eq!(
                 commands(&mut player, 50_000, event.clone()),
                 NONE,
                 "{event:?} in {state:?}"
             );
-            assert_eq!(player.state(), &state, "{event:?} in {state:?}");
+            assert_eq!(player, before, "{event:?} in {state:?}");
         }
     }
 }
 
 #[test]
-fn a_report_about_another_entry_or_an_answer_to_another_request_is_late_and_changes_nothing() {
+fn an_event_about_another_entry_request_or_timer_is_late_and_changes_nothing() {
     for state in every_state() {
-        for event in events_about(2, NEXT) {
-            if !matches!(
-                event,
-                Event::Resolved { .. }
-                    | Event::Playing { .. }
-                    | Event::Paused { .. }
-                    | Event::Buffering { .. }
-                    | Event::Ended { .. }
-            ) {
+        for event in events_about(2, NEXT, NEXT_TIMER) {
+            if matches!(event, Event::Pause | Event::Resume | Event::Seek { .. }) {
                 continue;
             }
             let mut player = player_in(state.clone());
+            let before = player.clone();
             assert_eq!(
                 commands(&mut player, 50_000, event.clone()),
                 NONE,
                 "{event:?} in {state:?}"
             );
-            assert_eq!(player.state(), &state, "{event:?} in {state:?}");
+            assert_eq!(player, before, "{event:?} in {state:?}");
         }
     }
 }
@@ -691,6 +965,19 @@ fn the_position_of_each_state() {
 }
 
 #[test]
+fn the_timer_and_renewal_of_each_state() {
+    for state in every_state() {
+        let waiting = matches!(
+            state,
+            State::Resolving { .. } | State::Loading { .. } | State::Buffering { .. }
+        );
+        assert_eq!(state.timer(), waiting.then_some(WAITING), "{state:?}");
+        let renews = !matches!(state, State::Idle | State::Stopped { .. });
+        assert_eq!(state.renewal(), renews.then_some(AVAILABLE), "{state:?}");
+    }
+}
+
+#[test]
 fn commands_come_in_order_and_say_when_there_are_none() {
     let mut player = player_in(playing(1, 0, 0));
     let sent = player.handle(at(0), Event::Start { entry: 2 });
@@ -702,7 +989,8 @@ fn commands_come_in_order_and_say_when_there_are_none() {
             &Command::Resolve {
                 entry: 2,
                 request: NEXT
-            }
+            },
+            &arm(DEADLINES.resolving())
         ]
     );
     assert!(player.handle(at(0), Event::Resume).is_empty());
@@ -726,6 +1014,9 @@ fn any_event() -> impl Strategy<Value = TestEvent> {
                 duration,
             }
         }),
+        (0..4_u64).prop_map(|request| Event::ResolveFailed {
+            request: Request(request)
+        }),
         (entry.clone(), position.clone(), 0..3_000_u32).prop_map(|(entry, position, rate)| {
             Event::Playing {
                 entry,
@@ -736,8 +1027,24 @@ fn any_event() -> impl Strategy<Value = TestEvent> {
             .prop_map(|(entry, position)| Event::Paused { entry, position }),
         (entry.clone(), position)
             .prop_map(|(entry, position)| Event::Buffering { entry, position }),
-        entry.prop_map(|entry| Event::Ended { entry }),
+        entry.clone().prop_map(|entry| Event::Ended { entry }),
+        entry.clone().prop_map(|entry| Event::Failed { entry }),
+        entry.prop_map(|entry| Event::Expired { entry }),
+        (0..8_u64).prop_map(|timer| Event::TimerFired {
+            timer: Timer(timer)
+        }),
     ]
+}
+
+/// The duration the state keeps, if any.
+fn duration_of(state: &TestState) -> Option<Duration> {
+    match state {
+        State::Loading { duration, .. }
+        | State::Playing { duration, .. }
+        | State::Paused { duration, .. }
+        | State::Buffering { duration, .. } => *duration,
+        _ => None,
+    }
 }
 
 proptest! {
@@ -745,7 +1052,7 @@ proptest! {
     fn after_stop_nothing_plays_loads_or_resolves_until_a_user_starts_or_resumes(
         events in prop::collection::vec(any_event(), 0..64),
     ) {
-        let mut player = TestPlayer::new();
+        let mut player = TestPlayer::new(DEADLINES);
         let mut stopped = false;
         for (now, event) in (0_u64..).step_by(100).zip(events) {
             let intent = matches!(event, Event::Start { .. } | Event::Resume);
@@ -770,7 +1077,7 @@ proptest! {
     fn the_entry_is_the_last_one_started_until_it_ends(
         events in prop::collection::vec(any_event(), 0..64),
     ) {
-        let mut player = TestPlayer::new();
+        let mut player = TestPlayer::new(DEADLINES);
         let mut last_started = None;
         for (now, event) in (0_u64..).step_by(100).zip(events) {
             if let Event::Start { entry } = event {
@@ -784,15 +1091,75 @@ proptest! {
     }
 
     #[test]
-    fn every_request_has_a_new_number(
+    fn every_request_and_every_timer_has_a_new_number(
         events in prop::collection::vec(any_event(), 0..64),
     ) {
-        let mut player = TestPlayer::new();
-        let mut seen = std::collections::HashSet::new();
+        let mut player = TestPlayer::new(DEADLINES);
+        let mut requests = std::collections::HashSet::new();
+        let mut timers = std::collections::HashSet::new();
         for (now, event) in (0_u64..).step_by(100).zip(events) {
             let sent: Vec<_> = player.handle(at(now), event).into_iter().collect();
             if let Some(request) = request_of(&sent) {
-                prop_assert!(seen.insert(request), "{:?} sent twice", request);
+                prop_assert!(requests.insert(request), "{:?} sent twice", request);
+            }
+            if let Some(timer) = timer_of(&sent) {
+                prop_assert!(timers.insert(timer), "{:?} armed twice", timer);
+            }
+        }
+    }
+
+    #[test]
+    fn a_waiting_state_waits_with_the_last_timer_armed(
+        events in prop::collection::vec(any_event(), 0..64),
+    ) {
+        let mut player = TestPlayer::new(DEADLINES);
+        let mut last = None;
+        for (now, event) in (0_u64..).step_by(100).zip(events) {
+            let sent: Vec<_> = player.handle(at(now), event).into_iter().collect();
+            if let Some(timer) = timer_of(&sent) {
+                last = Some(timer);
+            }
+            if let Some(timer) = player.state().timer() {
+                prop_assert_eq!(Some(timer), last);
+            }
+        }
+    }
+
+    #[test]
+    fn an_entry_gets_at_most_one_new_resolution_after_an_expiry_between_two_user_intents(
+        events in prop::collection::vec(any_event(), 0..64),
+    ) {
+        let mut player = TestPlayer::new(DEADLINES);
+        let mut renewed = false;
+        for (now, event) in (0_u64..).step_by(100).zip(events) {
+            let intent = matches!(event, Event::Start { .. } | Event::Resume);
+            let expiry = matches!(event, Event::Expired { .. });
+            let sent: Vec<_> = player.handle(at(now), event).into_iter().collect();
+            if intent && request_of(&sent).is_some() {
+                renewed = false;
+            }
+            if expiry && request_of(&sent).is_some() {
+                prop_assert!(!renewed, "a second renewal");
+                renewed = true;
+            }
+        }
+    }
+
+    #[test]
+    fn no_position_kept_or_sent_is_beyond_the_known_duration(
+        events in prop::collection::vec(any_event(), 0..64),
+    ) {
+        let mut player = TestPlayer::new(DEADLINES);
+        for (now, event) in (0_u64..).step_by(100).zip(events) {
+            let sent: Vec<_> = player.handle(at(now), event).into_iter().collect();
+            if let Some(duration) = duration_of(player.state()) {
+                let position = player.state().position_at(at(now));
+                prop_assert!(position <= Some(duration), "{:?} beyond {:?}", position, duration);
+                for command in &sent {
+                    if let Command::Load { from: position, .. } | Command::Seek { position } = command {
+                        prop_assert!(*position <= duration, "{:?} beyond {:?}", command, duration);
+                    }
+                }
             }
         }
     }
@@ -806,16 +1173,23 @@ fn a_seek_beyond_the_duration_goes_to_the_end() {
     let beyond = Event::Seek {
         position: ms(150_000),
     };
-    let to_the_end = [Command::Seek {
+    let to_the_end = Command::Seek {
         position: ms(100_000),
-    }];
+    };
     for state in [playing(1, 0, 0), buffering(1, 500)] {
         let mut player = player_in(state.clone());
-        assert_eq!(commands(&mut player, 0, beyond.clone()), to_the_end);
-        assert_eq!(player.state(), &buffering(1, 100_000), "from {state:?}");
+        assert_eq!(
+            commands(&mut player, 0, beyond.clone()),
+            [to_the_end.clone(), arm(DEADLINES.buffering())]
+        );
+        assert_eq!(
+            player.state(),
+            &buffering_with(1, 100_000, NEXT_TIMER),
+            "from {state:?}"
+        );
     }
     let mut player = player_in(paused(1, 7_000));
-    assert_eq!(commands(&mut player, 0, beyond), to_the_end);
+    assert_eq!(commands(&mut player, 0, beyond), [to_the_end]);
     assert_eq!(player.state(), &paused(1, 100_000));
 }
 
@@ -825,6 +1199,7 @@ fn a_seek_with_no_known_duration_goes_where_asked() {
         entry: 1,
         position: ms(7_000),
         duration: None,
+        renewal: AVAILABLE,
     });
     let sent = commands(
         &mut player,
@@ -858,7 +1233,7 @@ fn a_reported_position_beyond_the_duration_is_kept_at_the_end() {
         position: ms(150_000),
     };
     commands(&mut player, 0, event);
-    assert_eq!(player.state(), &buffering(1, 100_000));
+    assert_eq!(player.state(), &buffering_with(1, 100_000, NEXT_TIMER));
 }
 
 #[test]
@@ -875,42 +1250,13 @@ fn a_stopped_position_beyond_the_new_duration_loads_from_the_end() {
     );
     assert_eq!(
         sent,
-        [Command::Load {
-            source: SOURCE,
-            from: ms(100_000)
-        }]
+        [
+            Command::Load {
+                source: SOURCE,
+                from: ms(100_000)
+            },
+            arm(DEADLINES.loading())
+        ]
     );
-    assert_eq!(player.state(), &loading(1, 100_000));
-}
-
-/// The state's duration, when it keeps one.
-fn duration_of(state: &TestState) -> Option<Duration> {
-    match state {
-        State::Loading { duration, .. }
-        | State::Playing { duration, .. }
-        | State::Paused { duration, .. }
-        | State::Buffering { duration, .. } => *duration,
-        _ => None,
-    }
-}
-
-proptest! {
-    #[test]
-    fn no_position_kept_or_sent_is_beyond_the_known_duration(
-        events in prop::collection::vec(any_event(), 0..64),
-    ) {
-        let mut player = TestPlayer::new();
-        for (now, event) in (0_u64..).step_by(100).zip(events) {
-            let sent: Vec<_> = player.handle(at(now), event).into_iter().collect();
-            if let Some(duration) = duration_of(player.state()) {
-                let position = player.state().position_at(at(now));
-                prop_assert!(position <= Some(duration), "{:?} beyond {:?}", position, duration);
-                for command in &sent {
-                    if let Command::Load { from: position, .. } | Command::Seek { position } = command {
-                        prop_assert!(*position <= duration, "{:?} beyond {:?}", command, duration);
-                    }
-                }
-            }
-        }
-    }
+    assert_eq!(player.state(), &loading_with(1, 100_000, NEXT_TIMER));
 }
