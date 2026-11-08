@@ -9,13 +9,20 @@ use gungraun::{
 };
 use std::hint::black_box;
 use std::time::Duration;
-use vehicoule_core::player::{Anchor, Command, Commands, Event, Player, Rate, Request};
+use vehicoule_core::player::{
+    Anchor, Command, Commands, Deadlines, Event, Player, Rate, Request, Timer,
+};
 use vehicoule_core::time::Instant;
 
 type BenchPlayer = Player<u32, u32>;
 
 const ENTRY: u32 = 1;
 const SOURCE: u32 = 7;
+const DEADLINES: Deadlines = Deadlines::new(
+    Duration::from_secs(10),
+    Duration::from_secs(20),
+    Duration::from_secs(30),
+);
 
 fn at(secs: u64) -> Instant {
     Instant::from_origin(Duration::from_secs(secs))
@@ -23,7 +30,7 @@ fn at(secs: u64) -> Instant {
 
 /// A player resolving [`ENTRY`], and the request it waits for.
 fn resolving() -> (BenchPlayer, Request) {
-    let mut player = BenchPlayer::new();
+    let mut player = BenchPlayer::new(DEADLINES);
     let request = player
         .handle(at(0), Event::Start { entry: ENTRY })
         .into_iter()
@@ -53,6 +60,26 @@ fn playing() -> BenchPlayer {
         },
     );
     player
+}
+
+/// A player buffering [`ENTRY`], and the timer it waits with.
+fn buffering() -> (BenchPlayer, Timer) {
+    let mut player = playing();
+    let timer = player
+        .handle(
+            at(20),
+            Event::Buffering {
+                entry: ENTRY,
+                position: Duration::from_secs(22),
+            },
+        )
+        .into_iter()
+        .find_map(|command| match command {
+            Command::ArmTimer { timer, .. } => Some(timer),
+            _ => None,
+        })
+        .expect("buffering arms a timer");
+    (player, timer)
 }
 
 fn stopped() -> BenchPlayer {
@@ -139,9 +166,31 @@ fn late_report(player: BenchPlayer) -> (BenchPlayer, Commands<u32, u32>) {
     run(player, at(30), Event::Ended { entry: 2 })
 }
 
+#[library_benchmark]
+#[bench::playing(setup = playing, config = measured(456))]
+fn expired(player: BenchPlayer) -> (BenchPlayer, Commands<u32, u32>) {
+    run(player, at(30), Event::Expired { entry: ENTRY })
+}
+
+#[library_benchmark]
+#[bench::buffering(setup = buffering, config = measured(227))]
+fn deadline((player, timer): (BenchPlayer, Timer)) -> (BenchPlayer, Commands<u32, u32>) {
+    run(player, at(50), Event::TimerFired { timer })
+}
+
 library_benchmark_group!(
     name = player,
-    benchmarks = [start, resolved, report, pause, stop, resume, late_report]
+    benchmarks = [
+        start,
+        resolved,
+        report,
+        pause,
+        stop,
+        resume,
+        late_report,
+        expired,
+        deadline
+    ]
 );
 
 main!(library_benchmark_groups = player);

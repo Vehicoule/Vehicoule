@@ -61,6 +61,14 @@ fn any_option_duration() -> Option<Duration> {
     }
 }
 
+fn any_renewal() -> Renewal {
+    if kani::any() {
+        Renewal::Available
+    } else {
+        Renewal::Spent
+    }
+}
+
 fn any_state() -> State<u8, u8> {
     let entry: u8 = kani::any();
     match kani::any::<u8>() % 7 {
@@ -69,27 +77,35 @@ fn any_state() -> State<u8, u8> {
             entry,
             from: any_duration(),
             request: Request(kani::any()),
+            timer: Timer(kani::any()),
+            renewal: any_renewal(),
         },
         2 => State::Loading {
             entry,
             source: kani::any(),
             from: any_duration(),
             duration: any_option_duration(),
+            timer: Timer(kani::any()),
+            renewal: any_renewal(),
         },
         3 => State::Playing {
             entry,
             anchor: any_anchor(),
             duration: any_option_duration(),
+            renewal: any_renewal(),
         },
         4 => State::Paused {
             entry,
             position: any_duration(),
             duration: any_option_duration(),
+            renewal: any_renewal(),
         },
         5 => State::Buffering {
             entry,
             position: any_duration(),
             duration: any_option_duration(),
+            timer: Timer(kani::any()),
+            renewal: any_renewal(),
         },
         _ => State::Stopped {
             entry,
@@ -101,7 +117,7 @@ fn any_state() -> State<u8, u8> {
 /// Any event but `Start` and `Resume`, the user intents that end the guarantee after a stop.
 fn any_event_but_start_or_resume() -> Event<u8, u8> {
     let entry: u8 = kani::any();
-    match kani::any::<u8>() % 8 {
+    match kani::any::<u8>() % 12 {
         0 => Event::Pause,
         1 => Event::Stop,
         2 => Event::Seek {
@@ -124,15 +140,25 @@ fn any_event_but_start_or_resume() -> Event<u8, u8> {
             entry,
             position: any_duration(),
         },
-        _ => Event::Ended { entry },
+        7 => Event::Ended { entry },
+        8 => Event::ResolveFailed {
+            request: Request(kani::any()),
+        },
+        9 => Event::Failed { entry },
+        10 => Event::Expired { entry },
+        _ => Event::TimerFired {
+            timer: Timer(kani::any()),
+        },
     }
 }
 
-/// A player in `state`, with any number for its next request.
+/// A player in `state`, with any numbers for its next request and timer, and any deadlines.
 fn any_player(state: State<u8, u8>) -> Player<u8, u8> {
     Player {
         state,
         next: Request(kani::any()),
+        next_timer: Timer(kani::any()),
+        deadlines: Deadlines::new(any_duration(), any_duration(), any_duration()),
     }
 }
 
@@ -178,30 +204,31 @@ fn after_stop_nothing_plays_loads_or_resolves_until_a_user_intent() {
     assert!(!plays_loads_or_resolves(&commands));
 }
 
-/// A report about another entry than the player's, or an answer to another request than the one it waits for,
-/// changes nothing and sends nothing.
+/// A report, a failure or an expiry about another entry than the player's, an answer or a failure of another request
+/// than the one it waits for, and a timer it does not wait with, change nothing and send nothing.
 #[kani::proof]
-fn a_late_report_or_resolution_changes_nothing() {
+fn a_late_event_changes_nothing() {
     let state = any_state();
-    let before = state.clone();
     let mut player = any_player(state);
-    let next = player.next;
+    let before = player.clone();
     let event = any_event_but_start_or_resume();
     let late = match event {
-        Event::Resolved { request, .. } => !matches!(
+        Event::Resolved { request, .. } | Event::ResolveFailed { request } => !matches!(
             player.state,
             State::Resolving { request: awaited, .. } if awaited == request
         ),
         Event::Playing { entry, .. }
         | Event::Paused { entry, .. }
         | Event::Buffering { entry, .. }
-        | Event::Ended { entry } => player.state.entry() != Some(entry),
+        | Event::Ended { entry }
+        | Event::Failed { entry }
+        | Event::Expired { entry } => player.state.entry() != Some(entry),
+        Event::TimerFired { timer } => player.state.timer() != Some(timer),
         _ => return,
     };
     kani::assume(late);
     let commands = player.handle(any_instant(), event);
-    assert!(player.state == before);
-    assert!(player.next == next);
+    assert!(player == before);
     assert!(commands.is_empty());
 }
 
@@ -238,6 +265,54 @@ fn each_request_takes_the_next_number() {
             assert!(player.next == next);
         }
     }
+}
+
+/// From any state, an event that arms a timer numbers it with the player's next timer, waits with it, and moves the
+/// next timer on; an event that arms none keeps the next timer, and leaves the player waiting with the timer it waited
+/// with before, if any. So the player waits with the last timer it armed, and no two timers share a number.
+#[kani::proof]
+fn each_wait_takes_the_next_timer() {
+    let mut player = any_player(any_state());
+    let next = player.next_timer;
+    let waited = player.state.timer();
+    let commands = player.handle(any_instant(), any_event());
+    let armed = commands.iter().find_map(|command| match command {
+        Command::ArmTimer { timer, .. } => Some(*timer),
+        _ => None,
+    });
+    match armed {
+        Some(timer) => {
+            assert!(timer == next);
+            assert!(player.state.timer() == Some(next));
+            assert!(player.next_timer == next.following());
+        }
+        None => {
+            assert!(player.next_timer == next);
+            if let Some(timer) = player.state.timer() {
+                assert!(waited == Some(timer));
+            }
+        }
+    }
+}
+
+/// From a state whose renewal is spent, any event but a user's `Start` or `Resume` sends no `Resolve`, and leaves the
+/// renewal spent or the player without one (`Idle`, `Stopped`). With `after_stop_nothing_plays_loads_or_resolves_until_a_user_intent`,
+/// by induction on the events: between two user intents, an entry gets at most one new resolution after an expiry.
+#[kani::proof]
+fn a_spent_renewal_stays_spent_until_a_user_intent() {
+    let state = any_state();
+    kani::assume(state.renewal() == Some(Renewal::Spent));
+    let mut player = any_player(state);
+    let commands = player.handle(any_instant(), any_event_but_start_or_resume());
+    assert!(matches!(
+        player.state.renewal(),
+        Some(Renewal::Spent) | None
+    ));
+    assert!(
+        !commands
+            .iter()
+            .any(|command| matches!(command, Command::Resolve { .. }))
+    );
 }
 
 // Positions within the known duration (core spec, section 4, Events and transitions).
@@ -278,10 +353,10 @@ fn within_its_duration(state: &State<u8, u8>) -> bool {
 
 /// From a state whose position is within its known duration, any event keeps it within the duration it then knows, and
 /// sends no position beyond it. With `the_position_is_never_beyond_the_known_duration`, by induction on the events: the
-/// player never sends or shows a position beyond the known duration. An event sends at most two commands, so three
+/// player never sends or shows a position beyond the known duration. An event sends at most three commands, so four
 /// unwindings of the loop over them suffice, which Kani checks.
 #[kani::proof]
-#[kani::unwind(3)]
+#[kani::unwind(4)]
 fn positions_stay_within_the_known_duration() {
     let state = any_state();
     kani::assume(within_its_duration(&state));
