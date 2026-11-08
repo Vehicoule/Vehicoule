@@ -80,7 +80,7 @@ cargo deny --manifest-path crates/vehicoule-plugin-host/fuzz/Cargo.toml check
 cargo deny --manifest-path crates/vehicoule-core/fuzz/Cargo.toml check
 cargo deny --manifest-path crates/vehicoule-core/bench/Cargo.toml check
 cargo deny --manifest-path crates/vehicoule-plugin-host/bench/Cargo.toml check
-cargo mutants --workspace --cargo-arg=--locked   # cargo-mutants 27.1.0
+cargo mutants --workspace --cargo-arg=--locked   # cargo-mutants 27.1.0; on a pull request, --in-diff (ADR 0019)
 wasm-tools component wit wit/ > /dev/null       # wasm-tools 1.263.0, the plugin contract parses
 scripts/test-check-wit-compat.sh                 # the contract's version check passes its cases
 scripts/check-wit-compat.sh OLD_WIT_DIR wit      # a change to the contract follows its version rule

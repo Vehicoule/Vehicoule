@@ -26,3 +26,4 @@ Only the user moves an ADR from Proposed to Accepted.
 | [0016](0016-count-the-cores-instructions-with-callgrind.md) | The core's operations are benchmarked by instruction count, each under a ceiling | Accepted |
 | [0017](0017-no-telemetry-crash-reports-on-request.md) | Nothing is sent to the project, except a crash report the user chooses to send | Accepted |
 | [0018](0018-withdraw-the-itunes-plugin-until-video.md) | The `itunes` plugin is withdrawn until the video work starts | Accepted |
+| [0019](0019-test-only-the-changed-lines-mutants-on-pull-requests.md) | Pull requests test only the mutants in the lines they change; `main` tests them all | Accepted |

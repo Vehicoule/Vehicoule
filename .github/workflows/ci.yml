@@ -191,6 +191,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The merge commit and its first parent, the base: what the pull request changes.
+          fetch-depth: 2
       - name: Install the pinned toolchain
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -203,9 +205,18 @@ jobs:
       - name: Build the plugin host's test plugins
         run: scripts/build-plugin-fixtures.sh "$RUNNER_TEMP/plugin-fixtures"
       - name: Mutation testing
-        run: cargo mutants --workspace --cargo-arg=--locked --in-place --sharding round-robin --shard ${{ matrix.shard }}/4
+        # ADR 0019: a pull request tests only the mutants in the lines it changes against its base; a push to `main`
+        # tests them all, after each merge.
         env:
           VEHICOULE_PLUGIN_FIXTURES: ${{ runner.temp }}/plugin-fixtures
+          EVENT: ${{ github.event_name }}
+        run: |
+          args=()
+          if [ "$EVENT" = pull_request ]; then
+            git diff HEAD^1 HEAD > "$RUNNER_TEMP/pull-request.diff"
+            args=(--in-diff "$RUNNER_TEMP/pull-request.diff")
+          fi
+          cargo mutants --workspace --cargo-arg=--locked --in-place --sharding round-robin --shard ${{ matrix.shard }}/4 "${args[@]}"
 
   # The required check: green only when every shard is. `always()` makes it run, and fail, when a shard fails or is
   # cancelled; without it, it would be skipped, and a skipped required check counts as passed.
