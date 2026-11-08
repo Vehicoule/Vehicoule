@@ -28,8 +28,47 @@ env:
 # Every checkout sets `persist-credentials: false`: no job pushes, so the token is not left on disk for the steps
 # that run code from the pull request (zizmor's `artipacked` audit).
 jobs:
+  # Sorts what a pull request changes, so that one changing only documentation does not take a runner for each check:
+  # the jobs that need `changes` then skip, and GitHub counts a skipped job as passed, required or not. The checks
+  # that read documentation too (spelling, licenses) do not need it and always run, and everything runs on `main` and
+  # by hand. The jobs test `!= 'false'`, so a failure here makes them all run rather than skip.
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.sort.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The merge commit and its first parent, the base: what the pull request changes.
+          fetch-depth: 2
+      - name: See whether the pull request changes more than documentation
+        id: sort
+        env:
+          EVENT: ${{ github.event_name }}
+          # Read by no build, test, proof or tool but typos and reuse. `.claude/` and `reference/` are not in it: some
+          # repositories check them against a pinned source.
+          DOCS: '^(docs/|LICENSES/|[^/]+\.md$|\.github/CODEOWNERS$|\.github/pull_request_template\.md$)'
+        # `--no-renames` lists a moved file by its old path too, so moving one out of the code still counts.
+        run: |
+          if [ "$EVENT" != pull_request ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed=$(git diff --no-renames --name-only HEAD^1 HEAD)
+          echo "$changed"
+          if [ -n "$changed" ] && ! grep -qvE "$DOCS" <<< "$changed"; then
+            echo "Only documentation changes: the checks of the code skip."
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          fi
+
   check:
     name: check
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -65,6 +104,8 @@ jobs:
   # tests there, not only on Linux. Same steps as `check`'s tests; format, lints and docs do not depend on the OS.
   platforms:
     name: test (${{ matrix.os }})
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ${{ matrix.os }}
     strategy:
       # One failing platform must not hide another's failure.
@@ -98,6 +139,8 @@ jobs:
   # needed. The test plugins are Wasm, so they build as in `check`.
   test-32-bit:
     name: test (i686)
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -127,9 +170,13 @@ jobs:
   # The mutants are split into four shards that run side by side, each on its own runner: one runner took 10 to 19
   # minutes for the whole set. `--in-place` mutates this checkout instead of a copy, so the build reuses the `target/`
   # that rust-cache restored (a copy starts from an empty `target/`). Every shard runs the same command with the same
-  # denominator, so together they test every mutant exactly once (cargo-mutants' `--shard k/n`).
+  # denominator, so together they test every mutant exactly once (cargo-mutants' `--shard k/n`). `round-robin` deals
+  # the mutants out one by one: the default, `slice`, gave each shard a run of consecutive mutants, so the plugin
+  # host's, whose tests take ten times longer, all fell in one shard (12 minutes, against 2 for two others).
   mutants-shard:
     name: mutants shard ${{ matrix.shard }}/4
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     strategy:
       # One failing shard must not hide the mutants the others miss.
@@ -152,7 +199,7 @@ jobs:
       - name: Build the plugin host's test plugins
         run: scripts/build-plugin-fixtures.sh "$RUNNER_TEMP/plugin-fixtures"
       - name: Mutation testing
-        run: cargo mutants --workspace --cargo-arg=--locked --in-place --shard ${{ matrix.shard }}/4
+        run: cargo mutants --workspace --cargo-arg=--locked --in-place --sharding round-robin --shard ${{ matrix.shard }}/4
         env:
           VEHICOULE_PLUGIN_FIXTURES: ${{ runner.temp }}/plugin-fixtures
 
@@ -160,29 +207,39 @@ jobs:
   # cancelled; without it, it would be skipped, and a skipped required check counts as passed.
   mutants:
     name: mutants
-    needs: mutants-shard
+    needs: [changes, mutants-shard]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Every shard passed
         env:
+          CODE: ${{ needs.changes.outputs.code }}
           RESULT: ${{ needs.mutants-shard.result }}
+        # The shards skip, and this passes, only when `changes` found nothing but documentation.
         run: |
           echo "The shards' result: $RESULT"
+          if [ "$CODE" = false ] && [ "$RESULT" = skipped ]; then
+            echo "Only documentation changes: no shard to run."
+            exit 0
+          fi
           test "$RESULT" = success
 
-  # ADR 0004: the core's invariants, proved by Kani on every pull request. The harnesses are split across shards,
-  # since one job runs them one after the other.
+  # ADR 0004: the core's invariants, proved by Kani on every pull request. CBMC proves one harness on one core, so
+  # each shard proves as many harnesses at once as its runner has cores (`--jobs`), and the harnesses are split
+  # across three shards. Seven shards proving one harness at a time took 8 minutes each, compiling the workspace
+  # twice in each shard, and held seven of the account's runners.
   kani-shard:
-    name: kani shard ${{ matrix.shard }}/7
+    name: kani shard ${{ matrix.shard }}/3
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     strategy:
       # One failing shard must not hide the proofs the others fail.
       fail-fast: false
       matrix:
-        # 7 shards, prime to the 4 starting lengths of each operation's proofs: the costly 3-entry proofs, one in
-        # four of the sorted list, then land in every shard instead of in two.
-        shard: [0, 1, 2, 3, 4, 5, 6]
+        # 3 shards, prime to the 4 starting lengths of each operation's proofs: the costly 3-entry proofs, one in
+        # four of the sorted list, then land in every shard.
+        shard: [0, 1, 2]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -198,11 +255,13 @@ jobs:
           cargo install kani-verifier --version 0.68.0 --locked
           cargo kani setup
       - name: Prove this shard's harnesses
-        # Every harness is listed, so a new one is proved without editing this file. Each shard takes every 7th of
-        # the sorted list and checks that Kani verified exactly as many: an empty or short list must not pass.
+        # Every harness is listed, so a new one is proved without editing this file. Each shard takes every 3rd of
+        # the sorted list and checks that Kani verified exactly as many: an empty or short list must not pass. The
+        # terse output keeps each harness's result and, when one fails, its failed checks, without the list of every
+        # check that passed (200,000 lines a shard).
         env:
           SHARD: ${{ matrix.shard }}
-          SHARDS: 7
+          SHARDS: 3
         run: |
           cargo kani list --format json
           contracts=$(jq '.totals."contract-harnesses"' kani-list.json)
@@ -221,22 +280,28 @@ jobs:
           for harness in "${harnesses[@]}"; do
             args+=(--harness "$harness")
           done
-          cargo kani --workspace --exact "${args[@]}" | tee "$RUNNER_TEMP/kani.log"
+          cargo kani --workspace --exact --jobs "$(nproc)" --output-format terse "${args[@]}" | tee "$RUNNER_TEMP/kani.log"
           grep -qx "Complete - $count successfully verified harnesses, 0 failures, $count total." "$RUNNER_TEMP/kani.log"
 
   # The required check: green only when every shard is. `always()` makes it run, and fail, when a shard fails or is
   # cancelled; without it, it would be skipped, and a skipped required check counts as passed.
   kani:
     name: kani
-    needs: kani-shard
+    needs: [changes, kani-shard]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Every shard passed
         env:
+          CODE: ${{ needs.changes.outputs.code }}
           RESULT: ${{ needs.kani-shard.result }}
+        # The shards skip, and this passes, only when `changes` found nothing but documentation.
         run: |
           echo "The shards' result: $RESULT"
+          if [ "$CODE" = false ] && [ "$RESULT" = skipped ]; then
+            echo "Only documentation changes: no shard to run."
+            exit 0
+          fi
           test "$RESULT" = success
 
   # ADR 0013: fuzz targets for the plugin host's untrusted inputs, on the nightly toolchain that
@@ -246,6 +311,8 @@ jobs:
   # `install` compiles each input and runs 13 inputs a second, so CI only replays the test plugins through it.
   fuzz:
     name: fuzz
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -309,6 +376,8 @@ jobs:
   # install benchmark takes 15 s locally (Valgrind 3.22.0, one run).
   bench:
     name: bench
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -351,6 +420,8 @@ jobs:
 
   deny:
     name: deny
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -381,6 +452,8 @@ jobs:
   # The plugin contract (docs/plugin-host-spec.md, section 8) must parse as a WIT package.
   wit:
     name: wit
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -428,6 +501,8 @@ jobs:
   # A dependency no crate uses still widens the supply chain and the build (AGENTS.md, rule 11).
   machete:
     name: machete
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
