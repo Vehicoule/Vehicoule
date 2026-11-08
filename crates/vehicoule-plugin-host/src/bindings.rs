@@ -33,7 +33,15 @@ pub(crate) mod metadata {
 }
 
 pub(crate) mod resolve {
-    wasmtime::component::bindgen!({ path: "../../wit", world: "resolve-plugin" });
+    wasmtime::component::bindgen!({
+        path: "../../wit",
+        world: "resolve-plugin",
+        with: {
+            "vehicoule:plugin/types": crate::bindings::base::vehicoule::plugin::types,
+            "vehicoule:plugin/http": crate::bindings::base::vehicoule::plugin::http,
+            "vehicoule:plugin/log": crate::bindings::base::vehicoule::plugin::log,
+        },
+    });
 }
 
 pub(crate) mod radio {

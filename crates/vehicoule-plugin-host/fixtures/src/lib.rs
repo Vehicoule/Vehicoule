@@ -4,7 +4,8 @@
     feature = "extra-import",
     feature = "undeclared-export",
     feature = "good",
-    feature = "radio"
+    feature = "radio",
+    feature = "resolve"
 )))]
 wit_bindgen::generate!({ path: "../../../wit", world: "vehicoule:plugin/base@0.1.0" });
 
@@ -13,6 +14,9 @@ wit_bindgen::generate!({ path: "../../../wit", world: "vehicoule:plugin/search-p
 
 #[cfg(feature = "radio")]
 wit_bindgen::generate!({ path: "../../../wit", world: "vehicoule:plugin/radio-plugin@0.1.0" });
+
+#[cfg(feature = "resolve")]
+wit_bindgen::generate!({ path: "../../../wit", world: "vehicoule:plugin/resolve-plugin@0.1.0" });
 
 #[cfg(feature = "extra-import")]
 wit_bindgen::generate!({
@@ -70,6 +74,11 @@ fn behavior() -> Manifest {
 #[cfg(feature = "radio")]
 fn behavior() -> Manifest {
     manifest("radio", vec![Capability::Radio], hosts())
+}
+
+#[cfg(feature = "resolve")]
+fn behavior() -> Manifest {
+    manifest("resolve", vec![Capability::Resolve], hosts())
 }
 
 #[cfg(feature = "undeclared-export")]
@@ -401,8 +410,89 @@ impl exports::vehicoule::plugin::radio::Guest for Fixture {
     }
 }
 
+/// `resolve` does what the track's id says, so one plugin covers every call the tests make: `echo` (a stream on a
+/// declared host whose headers tell every field of the request), `stream:URL` (a stream at exactly that URL, declared
+/// or not), `fetch:URL` (a GET, the matched id named after what it returned), `error:KIND`; any other id returns a
+/// stream on a declared host, matched to the track's own id.
+#[cfg(feature = "resolve")]
+impl exports::vehicoule::plugin::resolve::Guest for Fixture {
+    fn resolve(
+        req: exports::vehicoule::plugin::resolve::Request,
+    ) -> Result<exports::vehicoule::plugin::resolve::Playable, vehicoule::plugin::types::Error>
+    {
+        use exports::vehicoule::plugin::resolve::Playable;
+        use vehicoule::plugin::http::Method;
+        use vehicoule::plugin::types::Error;
+
+        let on_declared_host = |matched_id: String| Playable {
+            url: String::from("https://a.cdn.example.org/stream"),
+            headers: Vec::new(),
+            mime: Some(String::from("audio/mp4")),
+            valid_for_ms: Some(21_540_000),
+            matched_id,
+        };
+
+        match req.track.id.as_str() {
+            "echo" => {
+                let artists: Vec<String> = req
+                    .track
+                    .artists
+                    .iter()
+                    .map(|artist| format!("{}={}", artist.id, artist.name))
+                    .collect();
+                Ok(Playable {
+                    url: String::from("https://a.cdn.example.org/echo"),
+                    headers: vec![
+                        (
+                            String::from("x-track"),
+                            format!(
+                                "title={};artists={};duration={:?};isrc={:?}",
+                                req.track.title,
+                                artists.join(","),
+                                req.track.duration_ms,
+                                req.track.isrc,
+                            ),
+                        ),
+                        (
+                            String::from("x-request"),
+                            format!(
+                                "rejected={};preferred={:?}",
+                                req.rejected.join(","),
+                                req.preferred
+                            ),
+                        ),
+                    ],
+                    mime: None,
+                    valid_for_ms: None,
+                    matched_id: String::from("echoed"),
+                })
+            }
+            "error:not-found" => Err(Error::NotFound),
+            "error:unsupported" => Err(Error::Unsupported),
+            "error:rate-limited" => Err(Error::RateLimited(Some(1_500))),
+            "error:invalid-input" => Err(Error::InvalidInput(String::from("bad track"))),
+            "error:upstream" => Err(Error::Upstream(String::from("service down"))),
+            id if id.starts_with("stream:") => Ok(Playable {
+                url: String::from(id.trim_start_matches("stream:")),
+                ..on_declared_host(String::from("streamed"))
+            }),
+            id if id.starts_with("fetch:") => {
+                let url = id.trim_start_matches("fetch:");
+                let outcome = request(Method::Get, url, Vec::new(), None);
+                Ok(on_declared_host(outcome))
+            }
+            id => Ok(on_declared_host(String::from(id))),
+        }
+    }
+}
+
 /// One request through the host, told as text: `STATUS:BODY` or the error's name.
-#[cfg(any(feature = "good", feature = "undeclared-export", feature = "radio"))]
+#[cfg(any(
+    feature = "good",
+    feature = "undeclared-export",
+    feature = "radio",
+    feature = "resolve"
+))]
 fn request(
     method: vehicoule::plugin::http::Method,
     url: &str,

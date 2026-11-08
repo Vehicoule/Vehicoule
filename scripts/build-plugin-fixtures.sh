@@ -14,6 +14,7 @@ mkdir -p "$out"
 features=(
   good
   radio
+  resolve
   extra-import
   endless-loop
   memory-bomb

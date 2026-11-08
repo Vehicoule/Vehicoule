@@ -77,7 +77,10 @@ Returned by `describe`, validated at install:
   it; otherwise the result is rejected as invalid. The player edge receives the plugin's declared hosts with the
   stream and checks every redirect hop against them: a hop to an undeclared host, or off `https`, fails the load, which
   the core handles as any failed load. This check is the player edge's (each platform player), specified here because
-  the sandbox depends on it; its tests come with each player.
+  the sandbox depends on it; its tests come with each player. The host makes the first check itself when `resolve`
+  returns, with the URL rules of the plugin's own requests (`https`, a host name, no port, no credentials) and the
+  manifest's hosts: the failure is `PluginFailure::InvalidResult`, naming `StreamUrl` or `StreamHostUndeclared`. The
+  stream's headers are passed on as the plugin gave them; each player edge checks them before sending.
 - **Log.** Messages are bounded in size and count per call, tagged with the plugin id, and never shown to the user as
   app text. A call keeps its first messages up to the log budget (section 6) and counts the ones after as dropped; a
   message longer than the budget is cut at a character boundary and marked as cut. Every control character, line

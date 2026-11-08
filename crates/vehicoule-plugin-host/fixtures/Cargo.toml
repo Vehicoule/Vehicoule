@@ -19,6 +19,8 @@ crate-type = ["cdylib"]
 good = []
 # A plugin that follows the contract and provides `radio`, whose seed's id picks how it behaves (see `src/lib.rs`).
 radio = []
+# A plugin that follows the contract and provides `resolve`, whose track's id picks how it behaves (see `src/lib.rs`).
+resolve = []
 # Imports an interface outside the contract.
 extra-import = []
 # Never returns from `describe`.
